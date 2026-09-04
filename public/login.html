@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Payment Tracking System — Login</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="login-wrapper">
+    <div class="login-box">
+      <h1>Payment Tracking System</h1>
+      <form id="login-form">
+        <input type="text" id="name" placeholder="Login name" autocomplete="username" required />
+        <input type="password" id="password" placeholder="Password" autocomplete="current-password" required />
+        <button type="submit">Log in</button>
+      </form>
+      <div id="msg" class="msg"></div>
+    </div>
+  </div>
+
+  <script src="js/common.js"></script>
+  <script src="js/login.js"></script>
+</body>
+</html>

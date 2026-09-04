@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Developer — Payment Tracking System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>Payment Tracking System — Developer</h1>
+    <div class="session-info">
+      <span id="user-name"></span>
+      <button class="secondary" id="logout-btn">Log out</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="reminder" class="reminder-banner" style="display:none;"></div>
+
+    <div class="card">
+      <h2>Create User</h2>
+      <form id="create-user-form" class="inline-form">
+        <div class="field">
+          <label for="new-name">Login name</label>
+          <input type="text" id="new-name" required />
+        </div>
+        <div class="field">
+          <label for="new-password">Password</label>
+          <input type="password" id="new-password" required />
+        </div>
+        <div class="field">
+          <label for="new-role">Role</label>
+          <select id="new-role" required>
+            <option value="operator">Operator</option>
+            <option value="admin">Admin</option>
+            <option value="developer">Developer</option>
+          </select>
+        </div>
+        <button type="submit">Create User</button>
+      </form>
+      <div id="create-msg" class="msg"></div>
+      <p style="color:var(--muted); font-size:12px; margin-top:8px;">
+        Password must be at least 6 characters, with at least one number and one special character.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>All Users</h2>
+      <table id="users-table">
+        <thead>
+          <tr><th>Name</th><th>Role</th><th>Status</th><th>Created</th><th>Actions</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div id="action-msg" class="msg"></div>
+    </div>
+  </main>
+
+  <script src="js/common.js"></script>
+  <script src="js/developer.js"></script>
+</body>
+</html>

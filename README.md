@@ -1,0 +1,138 @@
+# Payment Tracking System
+
+Implementation of the confirmed spec: Node.js/Express backend, Prisma ORM,
+PostgreSQL, server-side sessions, plain HTML/CSS/JS frontend (one page per
+role).
+
+## Locked-in decisions this build follows
+
+- Backend: Node.js + Express
+- ORM: Prisma
+- Frontend: plain HTML/CSS/vanilla JS, separate page per role (no build step)
+- Auth: express-session, in-memory store, 4-hour session, cookie is `secure: false` (plain HTTP on LAN)
+- Login identifier: `name` (must be unique) — no separate username field
+- Password hashing: argon2
+- Password policy: min 6 characters, at least 1 number, at least 1 special character
+- Primary keys: UUID on every table
+- Bill numbers: `DDMMYYYY` + 5-digit sequence, no separator, resets daily (e.g. `2408202600001`)
+- **Timezone: the system operates exclusively in India Standard Time (Asia/Kolkata, fixed UTC+5:30, no DST) — never the server's or browser's local timezone.** This is enforced explicitly in code (not left to OS/DB defaults) in: bill number date generation, analytics date-range filtering, day-wise/per-client day bucketing, and all frontend date/time display. See `src/utils/billNumber.js`, `src/utils/dateRange.js`, `src/routes/analytics.js`, and `public/js/common.js` (`formatDateTime`/`formatDate`) for where this is pinned. If this system is ever deployed for a business outside India, every one of those needs updating together — they must never disagree with each other.
+- **The Node process itself is pinned to `TZ=UTC`** (first line of `src/server.js`), regardless of what timezone the server PC's own OS is set to. The IST-bucketing logic above assumes database timestamps represent UTC clock digits; that assumption silently breaks if the Node process's own "local" time isn't UTC (e.g. if the server PC's system timezone is set to India Standard Time, which is likely for a machine physically in India) — it caused bills late in the day to appear under the next day in Analytics. Do not remove this line.
+- First developer account: created manually via SQL script (not an auto-seed)
+- Categories are chosen PER BILL, not stored on the client — the same client can have bills under different categories over time. Companies are never managed on their own screen — a company is created automatically (find-or-create by name) as a side effect of adding a "credit" category, and a bill's company is copied from its category, not chosen independently on the bill form
+- Bulk settlement for a company is hand-picked, not FIFO — the person settling sees that company's actual outstanding bills (with client names) and checks off exactly which ones to close in full; anything disputed is simply left unchecked
+- Credit-category bills require a Company; the company's running balance across all its bills is settled via one lump-sum "Settle Company Balance" action, applied oldest-bill-first (FIFO)
+- Port: 8080
+
+## One-time setup on the server PC
+
+1. **Install prerequisites** (on the Windows server PC): Node.js (LTS) and PostgreSQL.
+
+2. **Create the database and a DB user**, e.g. in psql:
+   ```sql
+   CREATE DATABASE payment_tracking;
+   CREATE USER ptsuser WITH PASSWORD 'changeme';
+   GRANT ALL PRIVILEGES ON DATABASE payment_tracking TO ptsuser;
+   ALTER USER ptsuser CREATEDB;
+   ```
+   Then connect to the new database and grant schema-level access (Postgres
+   15+ doesn't give non-owner roles `CREATE` on `public` by default):
+   ```sql
+   \c payment_tracking
+   GRANT ALL ON SCHEMA public TO ptsuser;
+   ```
+   Without these two grants you'll hit a `P3014` error and a
+   `permission denied for schema public` error respectively during migration.
+
+3. **Install project dependencies**:
+   ```
+   npm install
+   ```
+   This sandbox could not reach `binaries.prisma.sh` to download Prisma's
+   query engine, so `prisma generate`/`migrate` were not run here — run them
+   on the actual server PC, which will have normal internet access.
+
+4. **Configure environment**: copy `.env.example` to `.env` and fill in:
+   - `DATABASE_URL` — your real Postgres connection string
+   - `SESSION_SECRET` — a long random string (a command to generate one is in the file)
+   - `PORT` — leave as 8080 unless you want to change it
+   - `SESSION_MAX_AGE_MS` — leave as 14400000 (4 hours) unless you want to change it
+
+5. **Run the migration** (creates all tables from `prisma/schema.prisma`):
+   ```
+   npx prisma migrate dev --name init
+   ```
+
+6. **Create the first developer account** (only a developer can create other
+   users, so this one has to be inserted directly):
+   ```
+   node scripts/generate-password-hash.js "YourChosenPassword1!"
+   ```
+   Copy the printed hash into `scripts/create-first-developer.sql`
+   (replace `PASTE_ARGON2_HASH_HERE`), set the login name you want, then run:
+   ```
+   psql -U ptsuser -d payment_tracking -f scripts/create-first-developer.sql
+   ```
+
+7. **Start the server**:
+   ```
+   npm start
+   ```
+   You should see: `Payment Tracking System listening on http://0.0.0.0:8080`
+
+8. **Log in** at `http://localhost:8080/login.html` on the server PC with the
+   developer account you just created, then use the Developer page to create
+   your real operator and admin accounts.
+
+## Running from other PCs on the LAN
+
+- Give the server PC a static local IP (DHCP reservation on your router).
+- Allow inbound TCP on port 8080 through Windows Firewall on the server PC.
+- From any client PC, browse to `http://<server-LAN-IP>:8080/login.html`.
+
+## Keeping it running after logout / reboot
+
+Wrap `npm start` (or `node src/server.js`) as a Windows Service using NSSM
+or Task Scheduler, per Section 4 of the spec, so the app survives logout and
+restarts on reboot.
+
+## Resetting test data
+
+To wipe all business data (clients, bills, transactions, categories,
+companies, locations) and start a fresh testing session — while keeping
+every user account intact — run:
+```
+psql -U ptsuser -d payment_tracking -f scripts/reset-test-data.sql
+```
+This is destructive and has no undo except restoring a backup. Only run
+it against test/staging data, never production.
+
+## Backups
+
+Per the spec: schedule a nightly `pg_dump` via Windows Task Scheduler and
+sync the dump folder to a cloud drive (OneDrive/Google Drive). This isn't
+automated by this codebase — set it up as an OS-level scheduled task
+pointing at your Postgres install.
+
+## Project structure
+
+```
+prisma/schema.prisma        Database schema (source of truth)
+src/server.js                Express app entrypoint
+src/config/                  Prisma client + session middleware
+src/middleware/auth.js       requireAuth / requireRole guards
+src/routes/                  auth, users, clients, bills, transactions, analytics
+src/utils/                   bill number generator, password policy
+public/                      login.html, operator.html, admin.html, developer.html + shared css/js
+scripts/                     one-time helpers for creating the first developer account
+```
+
+## What was verified in this environment
+
+- All JavaScript files pass `node --check` (syntax-valid).
+- `npm install` completed successfully.
+- Prisma schema was authored carefully against the confirmed decisions, but
+  `npx prisma validate` could not run here because this sandbox's network
+  allowlist blocks `binaries.prisma.sh` (where Prisma downloads its query
+  engine). Run `npx prisma validate` yourself right after `npm install` on
+  the server PC as a first check — if anything's off in the schema, it'll
+  fail fast and loudly there, before you run the migration.

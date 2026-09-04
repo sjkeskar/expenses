@@ -1,0 +1,226 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  operator
+  admin
+  developer
+}
+
+enum BillStatus {
+  pending
+  fully_paid
+}
+
+enum PaymentMode {
+  cash
+  credit_card
+  upi
+}
+
+// The "action" a category triggers on the bill form. Currently only two
+// behaviors exist — standard (no extra fields) and credit (requires a
+// Company). Admin can add multiple category names under either behavior
+// (e.g. two different "standard" categories), but a genuinely NEW
+// behavior (a third type) requires code changes, not just an admin action.
+enum CategoryType {
+  standard
+  credit
+}
+
+// ---------------------------------------------------------------------------
+// users
+// - "name" doubles as the login identifier (must be unique) — confirmed choice.
+// - passwordHash stores an argon2 hash — confirmed choice.
+// - isDeleted / deletedAt / deletedBy implement the developer-only soft delete.
+// ---------------------------------------------------------------------------
+model User {
+  id           String    @id @default(uuid())
+  name         String    @unique
+  passwordHash String
+  role         Role
+  isDeleted    Boolean   @default(false)
+  deletedAt    DateTime?
+  deletedById  String?
+  deletedBy    User?     @relation("UserDeletions", fields: [deletedById], references: [id])
+  deletedUsers User[]    @relation("UserDeletions")
+  createdAt    DateTime  @default(now())
+
+  operatorTransactions Transaction[] @relation("OperatorTransactions")
+  createdTransactions  Transaction[] @relation("CreatedByTransactions")
+  updatedTransactions  Transaction[] @relation("UpdatedByTransactions")
+  createdBills         Bill[]        @relation("BillCreatedBy")
+
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// clients — name only, per confirmed decision (no phone/address/etc.)
+// ---------------------------------------------------------------------------
+model Client {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  bills        Bill[]
+  transactions Transaction[]
+
+  @@map("clients")
+}
+
+// ---------------------------------------------------------------------------
+// categories — chosen per bill (not stored on the client — the same client
+// could be billed under different categories on different bills). Admin-
+// managed list, like locations. "type" determines what the bill form asks
+// for: standard = nothing extra; credit = a Company is also required.
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// categories — chosen per bill (not stored on the client). Admin-managed.
+// "type" determines behavior: standard = nothing extra; credit = this
+// category IS tied to one company (companyId), set when the category is
+// created — there's no separate company picker on the bill form anymore.
+// ---------------------------------------------------------------------------
+model Category {
+  id        String       @id @default(uuid())
+  name      String       @unique
+  type      CategoryType
+  isActive  Boolean      @default(true)
+  createdAt DateTime     @default(now())
+
+  // Set only when type == "credit". Populated via find-or-create by
+  // company name at category-creation time (see categories.js) — admin
+  // never manages companies through a separate screen.
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id])
+
+  bills Bill[]
+
+  @@map("categories")
+}
+
+// ---------------------------------------------------------------------------
+// companies — created implicitly as a side effect of adding a "credit"
+// category (find-or-create by name), never through a standalone screen.
+// A company periodically settles the balance owed across its bills — see
+// the settlement route in companies.js, which lets the person settling
+// pick exactly which of the company's bills to close (not automatic
+// FIFO), since some may be disputed and shouldn't be touched.
+// ---------------------------------------------------------------------------
+model Company {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  categories Category[]
+  bills      Bill[]
+
+  @@map("companies")
+}
+
+// ---------------------------------------------------------------------------
+// locations — the fixed set of shop locations a bill can be attributed to.
+// Managed exclusively by admin: add / delete (soft, via isActive — see
+// note on the DELETE route in locations.js for why it's not a hard delete).
+// ---------------------------------------------------------------------------
+model Location {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  bills Bill[]
+
+  @@map("locations")
+}
+
+// ---------------------------------------------------------------------------
+// bills
+// - billNumber: human-readable sequential number, format DDMMYYYYNNNNN
+//   (no separator), counter resets daily — confirmed decision.
+//   Generated via BillCounter below, not by the DB serial type, because the
+//   counter must reset per calendar day rather than increment forever.
+// ---------------------------------------------------------------------------
+model Bill {
+  id             String     @id @default(uuid())
+  billNumber     String     @unique
+  clientId       String
+  client         Client     @relation(fields: [clientId], references: [id])
+  originalAmount Decimal    @db.Decimal(12, 2)
+  discountAmount Decimal    @default(0) @db.Decimal(12, 2)
+  netAmount      Decimal    @db.Decimal(12, 2)
+  balance        Decimal    @db.Decimal(12, 2)
+  status         BillStatus @default(pending)
+  createdAt      DateTime   @default(now())
+
+  // Nullable on purpose: added after initial rollout, so bills created
+  // before this field existed have no attribution rather than failing
+  // to migrate. Analytics groups those under "Unattributed (legacy bills)".
+  createdById String?
+  createdBy   User?   @relation("BillCreatedBy", fields: [createdById], references: [id])
+
+  // Nullable for the same reason as createdById above — bills created
+  // before this field existed won't have a location. New bills always
+  // get one; enforced at the application layer, not the DB, so existing
+  // data isn't broken by the migration.
+  locationId String?
+  location   Location? @relation(fields: [locationId], references: [id])
+
+  // Category is required for new bills (enforced at the application
+  // layer — nullable here for the same backward-compatibility reason as
+  // locationId).
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id])
+
+  // Copied from category.companyId at bill-creation time (see bills.js) —
+  // NOT chosen independently on the bill form. Only set when the chosen
+  // category's type is "credit"; always null for "standard" categories.
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id])
+
+  transactions Transaction[]
+
+  @@map("bills")
+}
+
+// ---------------------------------------------------------------------------
+// bill_counters — one row per calendar day (dateKey = DDMMYYYY),
+// incremented atomically inside a transaction to produce bill_number.
+// ---------------------------------------------------------------------------
+model BillCounter {
+  dateKey      String @id
+  lastSequence Int    @default(0)
+
+  @@map("bill_counters")
+}
+
+// ---------------------------------------------------------------------------
+// transactions — full audit trail (created_by/updated_by) + soft delete,
+// per the original architecture doc.
+// ---------------------------------------------------------------------------
+model Transaction {
+  id              String      @id @default(uuid())
+  billId          String
+  bill            Bill        @relation(fields: [billId], references: [id])
+  clientId        String
+  client          Client      @relation(fields: [clientId], references: [id])
+  amountCollected Decimal     @db.Decimal(12, 2)
+  mode            PaymentMode
+  operatorId      String
+  operator        User        @relation("OperatorTransactions", fields: [operatorId], references: [id])
+  createdAt       DateTime    @default(now())
+  createdById     String
+  createdBy       User        @relation("CreatedByTransactions", fields: [createdById], references: [id])
+  updatedAt       DateTime    @updatedAt
+  updatedById     String?
+  updatedBy       User?       @relation("UpdatedByTransactions", fields: [updatedById], references: [id])
+  isDeleted       Boolean     @default(false)
+
+  @@map("transactions")
+}

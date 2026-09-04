@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Admin — Payment Tracking System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>Payment Tracking System — Admin</h1>
+    <div class="session-info">
+      <span id="user-name"></span>
+      <button class="secondary" id="logout-btn">Log out</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="reminder" class="reminder-banner" style="display:none;"></div>
+
+    <div class="tabs">
+      <button data-tab="billing" class="active">Billing</button>
+      <button data-tab="analytics">Analytics</button>
+      <button data-tab="promote">Promote Operator</button>
+      <button data-tab="locations">Locations</button>
+      <button data-tab="categories">Categories</button>
+    </div>
+
+    <!-- Billing tab: same capabilities as operator -->
+    <section id="tab-billing">
+      <div class="card">
+        <h2>Create Bill</h2>
+        <form id="bill-form" class="inline-form">
+          <div class="field combobox-wrapper">
+            <label for="bill-client-input">Client (type to search, or type a new name to add one)</label>
+            <input type="text" id="bill-client-input" autocomplete="off" required placeholder="Start typing a client name" />
+            <input type="hidden" id="bill-client-id" />
+            <div id="bill-client-dropdown" class="combobox-list" style="display:none;"></div>
+          </div>
+          <div class="field combobox-wrapper">
+            <label for="bill-category-input">Category</label>
+            <input type="text" id="bill-category-input" autocomplete="off" required placeholder="e.g. Walk-in, Credit Client" />
+            <input type="hidden" id="bill-category-id" />
+            <div id="bill-category-dropdown" class="combobox-list" style="display:none;"></div>
+            <p id="bill-category-info" style="color:var(--muted); font-size:12px; margin:4px 0 0;"></p>
+          </div>
+          <div class="field">
+            <label for="bill-date">Bill date</label>
+            <input type="date" id="bill-date" required />
+          </div>
+          <div class="field combobox-wrapper">
+            <label for="bill-location-input">Location</label>
+            <input type="text" id="bill-location-input" autocomplete="off" required placeholder="Select the shop location" />
+            <input type="hidden" id="bill-location-id" />
+            <div id="bill-location-dropdown" class="combobox-list" style="display:none;"></div>
+          </div>
+          <div class="field">
+            <label for="original-amount">Original amount (MRP)</label>
+            <input type="number" id="original-amount" min="0.01" step="0.01" required />
+          </div>
+          <div class="field">
+            <label for="discount-amount">Discount amount</label>
+            <input type="number" id="discount-amount" min="0" step="0.01" value="0" />
+          </div>
+          <div class="field">
+            <label for="initial-amount">Amount collected now</label>
+            <input type="number" id="initial-amount" min="0" step="0.01" value="0" />
+          </div>
+          <div class="field">
+            <label for="initial-mode">Mode (if collecting now)</label>
+            <select id="initial-mode">
+              <option value="cash">Cash</option>
+              <option value="credit_card">Credit Card</option>
+              <option value="upi">UPI</option>
+            </select>
+          </div>
+          <button type="submit">Create Bill</button>
+        </form>
+        <div id="bill-msg" class="msg"></div>
+      </div>
+
+      <div class="card">
+        <h2>Record Payment</h2>
+        <p style="color:var(--muted); font-size:13px; margin-top:-8px;">
+          For topping up a bill that still has a balance remaining from before.
+        </p>
+        <form id="transaction-form" class="inline-form">
+          <div class="field combobox-wrapper">
+            <label for="tx-bill-input">Bill (type bill number or client name)</label>
+            <input type="text" id="tx-bill-input" autocomplete="off" required placeholder="Search pending bills" />
+            <input type="hidden" id="tx-bill-id" />
+            <div id="tx-bill-dropdown" class="combobox-list" style="display:none;"></div>
+          </div>
+          <div class="field">
+            <label for="tx-amount">Amount collected</label>
+            <input type="number" id="tx-amount" min="0.01" step="0.01" required />
+          </div>
+          <div class="field">
+            <label for="tx-mode">Mode</label>
+            <select id="tx-mode" required>
+              <option value="cash">Cash</option>
+              <option value="credit_card">Credit Card</option>
+              <option value="upi">UPI</option>
+            </select>
+          </div>
+          <button type="submit">Record Payment</button>
+        </form>
+        <div id="tx-msg" class="msg"></div>
+      </div>
+
+      <div class="card">
+        <h2>Settle Company Balance</h2>
+        <p style="color:var(--muted); font-size:13px; margin-top:-8px;">
+          Pick a company, then check off exactly which of its pending bills to close — skip any that are disputed. Each checked bill is paid off in full.
+        </p>
+        <form id="settlement-form" class="inline-form">
+          <div class="field combobox-wrapper">
+            <label for="settle-company-input">Company</label>
+            <input type="text" id="settle-company-input" autocomplete="off" required placeholder="Select a company" />
+            <input type="hidden" id="settle-company-id" />
+            <div id="settle-company-dropdown" class="combobox-list" style="display:none;"></div>
+          </div>
+          <div class="field">
+            <label for="settle-mode">Mode</label>
+            <select id="settle-mode" required>
+              <option value="cash">Cash</option>
+              <option value="credit_card">Credit Card</option>
+              <option value="upi">UPI</option>
+            </select>
+          </div>
+        </form>
+        <div id="settle-bills-container" style="display:none; margin-top:12px;">
+          <table id="settle-bills-table">
+            <thead><tr><th></th><th>Bill #</th><th>Client</th><th>Balance</th><th>Created</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <p id="settle-total-info" style="color:var(--muted); font-size:13px;">Total selected: ₹0.00</p>
+          <button type="button" id="settle-submit-btn">Settle Selected Bills</button>
+        </div>
+        <div id="settle-msg" class="msg"></div>
+      </div>
+
+      <div class="card">
+        <h2>Bills</h2>
+        <table id="bills-table">
+          <thead>
+            <tr><th>Bill #</th><th>Client</th><th>Category</th><th>Company</th><th>Location</th><th>Net Amount</th><th>Balance</th><th>Status</th><th>Created</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Analytics tab -->
+    <section id="tab-analytics" style="display:none;">
+      <div class="card">
+        <h2>Date Range</h2>
+        <form id="date-range-form" class="inline-form">
+          <div class="field">
+            <label for="start-date">From</label>
+            <input type="date" id="start-date" />
+          </div>
+          <div class="field">
+            <label for="end-date">To</label>
+            <input type="date" id="end-date" />
+          </div>
+          <button type="submit">Apply</button>
+          <button type="button" class="secondary" id="clear-date-range">Clear (all time)</button>
+        </form>
+        <p id="range-label" style="color:var(--muted); font-size:13px; margin-bottom:0;">Showing: today</p>
+      </div>
+
+      <div class="card">
+        <h2>Day-wise Summary</h2>
+        <table id="day-wise-table">
+          <thead>
+            <tr>
+              <th>Day</th>
+              <th>Total Collected</th>
+              <th>Transactions</th>
+              <th>Cash</th>
+              <th>Credit Card</th>
+              <th>UPI</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Operator-wise Summary</h2>
+        <table id="operator-wise-table">
+          <thead>
+            <tr>
+              <th>Operator</th>
+              <th>Total Billed</th>
+              <th>Discount Given</th>
+              <th>Amount Collected</th>
+              <th>Bills Created</th>
+              <th>Payments Taken</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Location-wise Summary</h2>
+        <p style="color:var(--muted); font-size:13px; margin-top:-8px;">
+          For bills created in the date range above. Pending reflects each bill's balance as of now, which may be lower than at the time if it's since been paid down.
+        </p>
+        <table id="location-wise-table">
+          <thead>
+            <tr>
+              <th>Location</th>
+              <th>Total Billed</th>
+              <th>Discount Given</th>
+              <th>Pending Amount</th>
+              <th>Bills Created</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Category-wise Summary</h2>
+        <p style="color:var(--muted); font-size:13px; margin-top:-8px;">
+          Bill counts for the date range above (e.g. walk-in vs credit).
+        </p>
+        <table id="category-wise-table">
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th>Behavior</th>
+              <th>Bills</th>
+              <th>Total Billed</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Company Outstanding Balances</h2>
+        <p style="color:var(--muted); font-size:13px; margin-top:-8px;">
+          Current balance owed by each company across all its credit bills — not scoped to the date range above.
+        </p>
+        <table id="company-outstanding-table">
+          <thead><tr><th>Company</th><th>Outstanding Balance</th><th>Pending Bills</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Client Outstanding Balances</h2>
+        <table id="client-outstanding-table">
+          <thead><tr><th>Client</th><th>Outstanding Balance</th><th>Pending Bills</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Per-Client Detail</h2>
+        <div class="field combobox-wrapper" style="margin-bottom:12px;">
+          <label for="ledger-client-input">Client (type to search)</label>
+          <input type="text" id="ledger-client-input" autocomplete="off" placeholder="Start typing a client name" />
+          <input type="hidden" id="ledger-client-id" />
+          <div id="ledger-client-dropdown" class="combobox-list" style="display:none;"></div>
+        </div>
+        <h3 style="font-size:14px;color:var(--muted);">Per-day summary (respects the date range above)</h3>
+        <table id="client-daily-table">
+          <thead><tr><th>Day</th><th>Total Collected</th><th>Transactions</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <h3 style="font-size:14px;color:var(--muted);margin-top:16px;">Bill ledger (full history)</h3>
+        <table id="client-ledger-table">
+          <thead><tr><th>Bill #</th><th>Net Amount</th><th>Balance</th><th>Status</th><th>Payments</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Promote tab -->
+    <section id="tab-promote" style="display:none;">
+      <div class="card">
+        <h2>Promote Operator to Admin</h2>
+        <p style="color:var(--muted); font-size:13px;">
+          Admins can only promote an existing operator to admin. Creating, demoting, or deactivating
+          accounts is handled by a developer.
+        </p>
+        <form id="promote-form" class="inline-form">
+          <div class="field">
+            <label for="promote-user">Operator</label>
+            <select id="promote-user" required></select>
+          </div>
+          <button type="submit">Promote to Admin</button>
+        </form>
+        <div id="promote-msg" class="msg"></div>
+      </div>
+    </section>
+
+    <!-- Locations tab -->
+    <section id="tab-locations" style="display:none;">
+      <div class="card">
+        <h2>Add Location</h2>
+        <p style="color:var(--muted); font-size:13px;">
+          This is the fixed list of shop locations operators can pick from when creating a bill.
+          Only admin can add or remove locations.
+        </p>
+        <form id="add-location-form" class="inline-form">
+          <div class="field">
+            <label for="new-location-name">Location name</label>
+            <input type="text" id="new-location-name" required />
+          </div>
+          <button type="submit">Add Location</button>
+        </form>
+        <div id="add-location-msg" class="msg"></div>
+      </div>
+
+      <div class="card">
+        <h2>Locations</h2>
+        <table id="locations-table">
+          <thead><tr><th>Name</th><th>Added</th><th>Actions</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div id="location-action-msg" class="msg"></div>
+      </div>
+    </section>
+
+    <!-- Categories tab -->
+    <section id="tab-categories" style="display:none;">
+      <div class="card">
+        <h2>Add Category</h2>
+        <p style="color:var(--muted); font-size:13px;">
+          This is the fixed list of categories operators pick from when creating a bill. "Standard" categories
+          (e.g. Walk-in) need nothing extra. "Credit" categories are tied to one company — type its name below;
+          an existing company is reused if it matches, otherwise a new one is created automatically. Only admin
+          can add or remove categories.
+        </p>
+        <form id="add-category-form" class="inline-form">
+          <div class="field">
+            <label for="new-category-name">Category name</label>
+            <input type="text" id="new-category-name" required />
+          </div>
+          <div class="field">
+            <label for="new-category-type">Behavior</label>
+            <select id="new-category-type" required>
+              <option value="standard">Standard (e.g. Walk-in)</option>
+              <option value="credit">Credit (tied to a company)</option>
+            </select>
+          </div>
+          <div class="field combobox-wrapper" id="new-category-company-field" style="display:none;">
+            <label for="new-category-company-input">Company (type to search, or type a new name to add one)</label>
+            <input type="text" id="new-category-company-input" autocomplete="off" placeholder="Start typing a company name" />
+            <input type="hidden" id="new-category-company-id" />
+            <div id="new-category-company-dropdown" class="combobox-list" style="display:none;"></div>
+          </div>
+          <button type="submit">Add Category</button>
+        </form>
+        <div id="add-category-msg" class="msg"></div>
+      </div>
+
+      <div class="card">
+        <h2>Categories</h2>
+        <table id="categories-table">
+          <thead><tr><th>Name</th><th>Behavior</th><th>Company</th><th>Added</th><th>Actions</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div id="category-action-msg" class="msg"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="js/common.js"></script>
+  <script src="js/admin.js"></script>
+</body>
+</html>

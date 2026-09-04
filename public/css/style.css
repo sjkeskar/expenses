@@ -1,0 +1,278 @@
+:root {
+  --bg: #eef2f0;
+  --surface: #ffffff;
+  --ink: #17231f;
+  --muted: #5d6b67;
+  --border: #dde3e0;
+  --primary: #1f6e5c;
+  --primary-dark: #14493d;
+  --accent: #c98a2c;
+  --danger: #b23a2e;
+  --success: #2e7d4f;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: "IBM Plex Sans", -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+header.topbar {
+  background: var(--primary-dark);
+  color: #f4f7f5;
+  padding: 16px 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 3px solid var(--accent);
+}
+
+header.topbar h1 {
+  font-size: 17px;
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+header.topbar .session-info {
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  color: #cfe0d9;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  border-radius: 6px;
+  padding: 9px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  background: var(--primary);
+  color: white;
+  transition: background 0.12s ease;
+}
+button:hover { background: var(--primary-dark); }
+button.secondary { background: #e3e9e6; color: var(--ink); }
+button.secondary:hover { background: #d3dbd6; }
+button.danger { background: var(--danger); }
+button.danger:hover { background: #8f2c22; }
+
+main {
+  max-width: 1140px;
+  margin: 28px auto;
+  padding: 0 20px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 22px;
+  margin-bottom: 20px;
+}
+
+.card h2 {
+  margin-top: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--primary-dark);
+}
+
+/* Forms: a real grid instead of ragged flex-wrap, so fields align into
+   clean, consistent rows regardless of how many there are. The submit
+   button always gets its own full-width row underneath, left-aligned,
+   rather than being squeezed in next to the last input. */
+form.inline-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px 18px;
+  align-items: end;
+}
+
+form.inline-form > button {
+  grid-column: 1 / -1;
+  justify-self: start;
+  margin-top: 2px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.field label {
+  font-size: 12.5px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+input, select {
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+  width: 100%;
+  background: var(--surface);
+  color: var(--ink);
+}
+input:focus, select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(31, 110, 92, 0.12);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+th, td {
+  text-align: left;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+th {
+  background: #e4ebe7;
+  color: var(--primary-dark);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+tr:hover td { background: #f5f8f6; }
+
+.badge {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.badge.pending { background: #fbe9e7; color: var(--danger); }
+.badge.fully_paid { background: #e5f2e9; color: var(--success); }
+.badge.role-operator { background: #e4ebe7; color: var(--primary-dark); }
+.badge.role-admin { background: #fbeed9; color: var(--accent); }
+.badge.role-developer { background: #eae7f7; color: #5849a8; }
+
+.msg { font-size: 13px; margin-top: 8px; }
+.msg.error { color: var(--danger); }
+.msg.success { color: var(--success); }
+
+.login-wrapper {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.login-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 34px;
+  width: 320px;
+  border-top: 3px solid var(--accent);
+}
+
+.login-box h1 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--primary-dark);
+  margin-top: 0;
+}
+
+.login-box input {
+  width: 100%;
+  margin-bottom: 12px;
+}
+
+.login-box button {
+  width: 100%;
+}
+
+.reminder-banner {
+  background: #fbeed9;
+  border: 1px solid #e8c98a;
+  color: #7a5715;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+/* Tabs: an underline-indicator bar rather than solid pill buttons — the
+   active tab is marked by weight + a gold underline, not a filled
+   background, so the row reads as navigation rather than a bank of
+   identical buttons. */
+.tabs {
+  display: flex;
+  gap: 26px;
+  margin-bottom: 26px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.tabs button {
+  background: none;
+  color: var(--muted);
+  border: none;
+  border-radius: 0;
+  padding: 10px 2px 12px;
+  margin-bottom: -1px;
+  font-weight: 500;
+  border-bottom: 2px solid transparent;
+}
+.tabs button:hover { background: none; color: var(--ink); }
+.tabs button.active {
+  color: var(--primary-dark);
+  font-weight: 600;
+  border-bottom-color: var(--accent);
+}
+
+.combobox-wrapper {
+  position: relative;
+}
+
+.combobox-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-top: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  box-shadow: 0 8px 20px rgba(20, 40, 34, 0.1);
+}
+
+.combobox-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.combobox-item:hover {
+  background: var(--bg);
+}
+
+.combobox-sub {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
