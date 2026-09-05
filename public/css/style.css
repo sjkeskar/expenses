@@ -63,6 +63,16 @@ button.secondary:hover { background: #d3dbd6; }
 button.danger { background: var(--danger); }
 button.danger:hover { background: #8f2c22; }
 
+/* Explicit, reliable focus ring for keyboard navigation — custom
+   border:none buttons can otherwise lose or clip the browser's default
+   focus outline, which matters a lot for a keyboard-only operator. */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--primary-dark);
+  outline-offset: 2px;
+}
+
 main {
   max-width: 1140px;
   margin: 28px auto;
@@ -271,8 +281,52 @@ tr:hover td { background: #f5f8f6; }
   background: var(--bg);
 }
 
+.combobox-item.active {
+  background: var(--bg);
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+
 .combobox-sub {
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
+}
+
+/* Change Password modal — shared across operator/admin/developer pages. */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 40, 34, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal-box {
+  background: var(--surface);
+  border-radius: 12px;
+  padding: 28px;
+  width: 340px;
+  border-top: 3px solid var(--accent);
+}
+
+.modal-box h2 {
+  margin-top: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--primary-dark);
+}
+
+.modal-box form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
 }

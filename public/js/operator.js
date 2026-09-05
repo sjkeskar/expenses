@@ -24,6 +24,7 @@ async function init() {
   }
 
   document.getElementById("logout-btn").addEventListener("click", logout);
+  setupChangePasswordModal();
 
   setupComboboxes();
   document.getElementById("bill-date").value = getTodayIstDateString();

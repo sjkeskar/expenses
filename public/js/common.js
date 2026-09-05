@@ -104,6 +104,8 @@ function showMessage(el, text, isError) {
 // items: array of { id, ...whatever renderLabel/renderSub need }
 function attachCombobox({ input, dropdown, hiddenInput, items, renderLabel, renderSub, onSelect }) {
   let currentItems = items;
+  let visibleItems = []; // whatever's actually rendered in the dropdown right now
+  let activeIndex = -1; // keyboard-highlighted row, -1 = none
 
   function filterItems(query) {
     const q = query.trim().toLowerCase();
@@ -112,23 +114,65 @@ function attachCombobox({ input, dropdown, hiddenInput, items, renderLabel, rend
   }
 
   function render(filtered) {
-    if (!filtered.length) {
+    visibleItems = filtered.slice(0, 20);
+    activeIndex = -1;
+
+    if (!visibleItems.length) {
       dropdown.style.display = "none";
       dropdown.innerHTML = "";
+      input.setAttribute("aria-expanded", "false");
       return;
     }
-    dropdown.innerHTML = filtered
-      .slice(0, 20)
+    dropdown.innerHTML = visibleItems
       .map(
-        (item) => `
-        <div class="combobox-item" data-id="${item.id}">
+        (item, i) => `
+        <div class="combobox-item" role="option" id="${input.id}-opt-${i}" data-index="${i}" data-id="${item.id}">
           <span>${renderLabel(item)}</span>
           ${renderSub ? `<span class="combobox-sub">${renderSub(item)}</span>` : ""}
         </div>`
       )
       .join("");
     dropdown.style.display = "block";
+    input.setAttribute("aria-expanded", "true");
   }
+
+  // Reflects `activeIndex` onto the DOM (highlight class + aria-selected)
+  // and scrolls the highlighted row into view for long lists.
+  function paintActive() {
+    const rows = dropdown.querySelectorAll(".combobox-item");
+    rows.forEach((row, i) => {
+      const isActive = i === activeIndex;
+      row.classList.toggle("active", isActive);
+      row.setAttribute("aria-selected", isActive ? "true" : "false");
+      if (isActive) row.scrollIntoView({ block: "nearest" });
+    });
+    input.setAttribute("aria-activedescendant", activeIndex >= 0 ? `${input.id}-opt-${activeIndex}` : "");
+  }
+
+  // Commits a selection (by keyboard or mouse) — fills both the visible
+  // text field and the hidden id, fires onSelect, and closes the dropdown.
+  function commit(item) {
+    input.value = renderLabel(item);
+    hiddenInput.value = item.id;
+    if (onSelect) onSelect(item);
+    dropdown.style.display = "none";
+    input.setAttribute("aria-expanded", "false");
+  }
+
+  // What Enter/Tab should commit when nothing's been arrow-key-highlighted
+  // yet: the highlighted row if there is one, otherwise the sole visible
+  // match if typing has narrowed it down to exactly one — so a fast typist
+  // who typed enough characters to uniquely match doesn't have to also
+  // press an arrow key first.
+  function resolveSelection() {
+    if (activeIndex >= 0 && visibleItems[activeIndex]) return visibleItems[activeIndex];
+    if (visibleItems.length === 1) return visibleItems[0];
+    return null;
+  }
+
+  input.setAttribute("role", "combobox");
+  input.setAttribute("aria-expanded", "false");
+  input.setAttribute("aria-autocomplete", "list");
 
   input.addEventListener("input", () => {
     hiddenInput.value = "";
@@ -152,19 +196,57 @@ function attachCombobox({ input, dropdown, hiddenInput, items, renderLabel, rend
     // Delay so a click on a suggestion registers before the list hides.
     setTimeout(() => {
       dropdown.style.display = "none";
+      input.setAttribute("aria-expanded", "false");
     }, 150);
+  });
+
+  input.addEventListener("keydown", (e) => {
+    const isOpen = dropdown.style.display !== "none" && visibleItems.length > 0;
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (!isOpen) {
+        render(filterItems(input.value)); // reopen suggestions from keyboard alone
+        return;
+      }
+      activeIndex = Math.min(activeIndex + 1, visibleItems.length - 1);
+      paintActive();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!isOpen) return;
+      activeIndex = Math.max(activeIndex - 1, 0);
+      paintActive();
+    } else if (e.key === "Enter") {
+      if (!isOpen) return; // let the form submit normally
+      const selection = resolveSelection();
+      if (selection) {
+        e.preventDefault();
+        commit(selection);
+      }
+      // No resolvable selection (still ambiguous, multiple matches, none
+      // highlighted): don't block Enter — let the browser's normal
+      // required-field validation handle an incomplete/invalid form
+      // rather than silently swallowing the keypress.
+    } else if (e.key === "Tab") {
+      // Committing on Tab too (not just Enter) means a keyboard-only
+      // operator can just keep tabbing through a form without having to
+      // remember to press Enter first on every combobox field.
+      if (!isOpen) return;
+      const selection = resolveSelection();
+      if (selection) commit(selection);
+    } else if (e.key === "Escape") {
+      if (!isOpen) return;
+      e.preventDefault();
+      dropdown.style.display = "none";
+      input.setAttribute("aria-expanded", "false");
+    }
   });
 
   dropdown.addEventListener("mousedown", (e) => {
     const el = e.target.closest(".combobox-item");
     if (!el) return;
-    const item = currentItems.find((i) => i.id === el.dataset.id);
-    if (item) {
-      input.value = renderLabel(item);
-      hiddenInput.value = item.id;
-      if (onSelect) onSelect(item);
-    }
-    dropdown.style.display = "none";
+    const item = visibleItems[Number(el.dataset.index)];
+    if (item) commit(item);
   });
 
   return {
@@ -178,4 +260,69 @@ function attachCombobox({ input, dropdown, hiddenInput, items, renderLabel, rend
       hiddenInput.value = "";
     },
   };
+}
+
+// Wires up the shared "Change Password" modal (markup duplicated across
+// operator.html / admin.html / developer.html, logic centralized here).
+// Safe to call on any page — does nothing if the modal's elements aren't
+// present, so pages that don't include the modal aren't affected.
+function setupChangePasswordModal() {
+  const openBtn = document.getElementById("change-password-btn");
+  const modal = document.getElementById("change-password-modal");
+  const cancelBtn = document.getElementById("change-password-cancel");
+  const form = document.getElementById("change-password-form");
+  const msg = document.getElementById("change-password-msg");
+
+  if (!openBtn || !modal || !form || !msg) return;
+
+  function closeModal() {
+    modal.style.display = "none";
+    form.reset();
+    msg.textContent = "";
+    msg.className = "msg";
+  }
+
+  openBtn.addEventListener("click", () => {
+    msg.textContent = "";
+    msg.className = "msg";
+    modal.style.display = "flex";
+  });
+
+  cancelBtn.addEventListener("click", closeModal);
+
+  // Click on the dimmed backdrop (not the box itself) also closes it.
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) closeModal();
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const currentPassword = document.getElementById("current-password").value;
+    const newPassword = document.getElementById("new-password").value;
+    const confirmPassword = document.getElementById("confirm-new-password").value;
+
+    if (newPassword !== confirmPassword) {
+      showMessage(msg, "New password and confirmation do not match.", true);
+      return;
+    }
+
+    try {
+      await api("/auth/password", { method: "PATCH", body: { currentPassword, newPassword } });
+      form.reset();
+      showMessage(msg, "Password changed. Redirecting you to log in again with it...", false);
+      // The backend already destroyed the session — don't just close the
+      // modal, actually navigate away, since every other API call on this
+      // page would now fail with 401 anyway. sessionStorage carries the
+      // confirmation message across the redirect so login.html can show it.
+      sessionStorage.setItem(
+        "passwordChangedNotice",
+        "Your password was changed. Please log in with your new password."
+      );
+      setTimeout(() => {
+        window.location.href = "login.html";
+      }, 1200);
+    } catch (err) {
+      showMessage(msg, err.message, true);
+    }
+  });
 }

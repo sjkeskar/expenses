@@ -71,6 +71,13 @@ app.use("/api/locations", locationRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/companies", companyRoutes);
 
+// Root path has no index.html of its own — redirect straight to the
+// login page instead of a blank 404, so people don't need to know/type
+// the exact filename to get started.
+app.get("/", (req, res) => {
+  res.redirect("/login.html");
+});
+
 // Static frontend (plain HTML/CSS/JS, separate page per role — confirmed decision)
 app.use(express.static(path.join(__dirname, "..", "public")));
 
@@ -92,6 +99,6 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`Payment Tracking System listening on http://0.0.0.0:${PORT}`);
 });

@@ -14,6 +14,7 @@ async function init() {
   }
 
   document.getElementById("logout-btn").addEventListener("click", logout);
+  setupChangePasswordModal();
   await loadUsers();
 }
 

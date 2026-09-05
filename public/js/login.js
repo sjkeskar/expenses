@@ -1,3 +1,14 @@
+// If a password change just happened, this page was landed on via a
+// forced redirect (see common.js's setupChangePasswordModal) — show that
+// as a one-time confirmation rather than a blank login page.
+(() => {
+  const notice = sessionStorage.getItem("passwordChangedNotice");
+  if (notice) {
+    sessionStorage.removeItem("passwordChangedNotice");
+    showMessage(document.getElementById("msg"), notice, false);
+  }
+})();
+
 document.getElementById("login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const name = document.getElementById("name").value.trim();
