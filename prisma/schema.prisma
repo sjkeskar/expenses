@@ -46,11 +46,11 @@ model User {
   passwordHash String
   role         Role
   isDeleted    Boolean   @default(false)
-  deletedAt    DateTime?
+  deletedAt    DateTime? @db.Timestamptz(3)
   deletedById  String?
   deletedBy    User?     @relation("UserDeletions", fields: [deletedById], references: [id])
   deletedUsers User[]    @relation("UserDeletions")
-  createdAt    DateTime  @default(now())
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
 
   operatorTransactions Transaction[] @relation("OperatorTransactions")
   createdTransactions  Transaction[] @relation("CreatedByTransactions")
@@ -66,7 +66,7 @@ model User {
 model Client {
   id        String   @id @default(uuid())
   name      String
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   bills        Bill[]
   transactions Transaction[]
@@ -91,7 +91,7 @@ model Category {
   name      String       @unique
   type      CategoryType
   isActive  Boolean      @default(true)
-  createdAt DateTime     @default(now())
+  createdAt DateTime     @default(now()) @db.Timestamptz(3)
 
   // Set only when type == "credit". Populated via find-or-create by
   // company name at category-creation time (see categories.js) — admin
@@ -116,7 +116,7 @@ model Company {
   id        String   @id @default(uuid())
   name      String   @unique
   isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   categories Category[]
   bills      Bill[]
@@ -133,7 +133,7 @@ model Location {
   id        String   @id @default(uuid())
   name      String   @unique
   isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
 
   bills Bill[]
 
@@ -157,7 +157,7 @@ model Bill {
   netAmount      Decimal    @db.Decimal(12, 2)
   balance        Decimal    @db.Decimal(12, 2)
   status         BillStatus @default(pending)
-  createdAt      DateTime   @default(now())
+  createdAt      DateTime   @default(now()) @db.Timestamptz(3)
 
   // Nullable on purpose: added after initial rollout, so bills created
   // before this field existed have no attribution rather than failing
@@ -214,10 +214,10 @@ model Transaction {
   mode            PaymentMode
   operatorId      String
   operator        User        @relation("OperatorTransactions", fields: [operatorId], references: [id])
-  createdAt       DateTime    @default(now())
+  createdAt       DateTime    @default(now()) @db.Timestamptz(3)
   createdById     String
   createdBy       User        @relation("CreatedByTransactions", fields: [createdById], references: [id])
-  updatedAt       DateTime    @updatedAt
+  updatedAt       DateTime    @updatedAt @db.Timestamptz(3)
   updatedById     String?
   updatedBy       User?       @relation("UpdatedByTransactions", fields: [updatedById], references: [id])
   isDeleted       Boolean     @default(false)

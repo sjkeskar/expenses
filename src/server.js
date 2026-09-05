@@ -1,23 +1,10 @@
-// CRITICAL: this must be the very first thing that runs, before any other
-// require() — including dotenv and Prisma — so no Date-handling code (ours
-// or a library's) can read the Windows server PC's system timezone before
-// we've overridden it.
-//
-// The whole app's IST-handling design (bill numbers, analytics date
-// bucketing, etc.) assumes timestamps stored in the database represent
-// UTC clock digits, then explicitly shifts by +5:30 to compute IST. That
-// assumption silently breaks if the Node process's own "local" timezone
-// isn't UTC — which, without this line, just inherits whatever the
-// server PC's OS is set to. For a machine physically in India, that's
-// very likely India Standard Time already, which would double-apply the
-// +5:30 shift and push entries into the wrong day (e.g. a late-evening
-// bill on the 31st showing up under the 1st).
-//
-// Pinning this to UTC removes that ambiguity entirely, regardless of the
-// server PC's own timezone setting. It does NOT affect any of the
-// explicit Asia/Kolkata Intl.DateTimeFormat calls elsewhere in the code
-// (istDate.js, etc.) — those already specify their timezone explicitly
-// and ignore the process's local zone either way.
+// Defensive best practice, NOT load-bearing for correctness anymore: all
+// timestamp columns are `timestamptz` (see prisma/schema.prisma), which
+// Postgres always stores as a true UTC instant internally regardless of
+// what timezone the writing process considered "local" — so this pin is
+// no longer required to avoid the double-offset bug that motivated it
+// originally. Left in place anyway so nothing else in the app (logging,
+// etc.) can silently depend on the Windows server PC's own OS timezone.
 process.env.TZ = "UTC";
 
 require("dotenv").config();

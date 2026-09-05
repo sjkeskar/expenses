@@ -13,6 +13,12 @@
 // `to` is exclusive and pushed to the start of the day AFTER endDate (also
 // in IST), so selecting endDate = a given day includes all transactions
 // on that day.
+//
+// This logic doesn't depend on the database column type — it produces
+// correct absolute instants either way — but it pairs cleanly with
+// `timestamptz` columns (see prisma/schema.prisma): the comparison
+// `"createdAt" >= from AND "createdAt" < to` is unambiguous because both
+// sides are real, well-defined instants, not naive clock digits.
 function parseDateRange(query) {
   const { startDate, endDate } = query;
 

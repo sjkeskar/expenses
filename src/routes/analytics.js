@@ -13,17 +13,18 @@ router.use(requireAuth, requireRole("admin"));
 // amount for cash/credit_card/upi) so admin can see how many transactions
 // on a given day used each method.
 //
-// "Day" is bucketed in India Standard Time (UTC+5:30), not the database's
-// stored clock digits, which are effectively UTC. Without the `+ INTERVAL
-// '5 hours 30 minutes'` shift, a transaction at 2 AM IST would fall under
-// the PREVIOUS day's bucket (since 2 AM IST = 8:30 PM UTC the day before),
-// which is exactly the bug where bills from early IST morning didn't show
-// up when filtering for "today."
+// "Day" is bucketed in India Standard Time via the standard `AT TIME
+// ZONE` conversion, which works correctly and unambiguously because
+// "createdAt" is a timestamptz column (Postgres always stores the true
+// UTC instant internally regardless of how/where it was written) — this
+// is NOT the same as the old naive-timestamp `+ INTERVAL '5:30'` shift,
+// which depended on assumptions about what timezone the writing process
+// considered "local."
 router.get("/day-wise", async (req, res) => {
   const { from, to } = parseDateRange(req.query);
   const rows = await prisma.$queryRaw`
     SELECT
-      DATE("createdAt" + INTERVAL '5 hours 30 minutes') AS day,
+      DATE("createdAt" AT TIME ZONE 'Asia/Kolkata') AS day,
       SUM("amountCollected")::float AS total_collected,
       COUNT(*)::int AS transaction_count,
       COUNT(*) FILTER (WHERE "mode" = 'cash')::int AS cash_count,
@@ -34,7 +35,7 @@ router.get("/day-wise", async (req, res) => {
       COALESCE(SUM("amountCollected") FILTER (WHERE "mode" = 'upi'), 0)::float AS upi_total
     FROM "transactions"
     WHERE "isDeleted" = false AND "createdAt" >= ${from} AND "createdAt" < ${to}
-    GROUP BY DATE("createdAt" + INTERVAL '5 hours 30 minutes')
+    GROUP BY DATE("createdAt" AT TIME ZONE 'Asia/Kolkata')
     ORDER BY day DESC;
   `;
   res.json({ dayWise: rows });
@@ -211,20 +212,19 @@ router.get("/client-outstanding", async (req, res) => {
 });
 
 // GET /api/analytics/client-daily/:clientId?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
-// Per-client, per-day collection summary. Same IST day-bucketing fix as
-// the day-wise endpoint above — see the comment there for why the
-// interval shift is needed.
+// Per-client, per-day collection summary. Same IST day-bucketing approach
+// as the day-wise endpoint above — see the comment there.
 router.get("/client-daily/:clientId", async (req, res) => {
   const { from, to } = parseDateRange(req.query);
   const rows = await prisma.$queryRaw`
     SELECT
-      DATE(t."createdAt" + INTERVAL '5 hours 30 minutes') AS day,
+      DATE(t."createdAt" AT TIME ZONE 'Asia/Kolkata') AS day,
       SUM(t."amountCollected")::float AS total_collected,
       COUNT(t.*)::int AS transaction_count
     FROM "transactions" t
     WHERE t."isDeleted" = false AND t."clientId" = ${req.params.clientId}
       AND t."createdAt" >= ${from} AND t."createdAt" < ${to}
-    GROUP BY DATE(t."createdAt" + INTERVAL '5 hours 30 minutes')
+    GROUP BY DATE(t."createdAt" AT TIME ZONE 'Asia/Kolkata')
     ORDER BY day DESC;
   `;
   res.json({ clientDaily: rows });
