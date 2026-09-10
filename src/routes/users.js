@@ -39,15 +39,15 @@ router.get("/", requireAuth, requireRole("developer"), async (req, res) => {
   res.json({ users });
 });
 
-// POST /api/users — developer only. Creates operator, admin, or developer accounts.
+// POST /api/users — developer only. Creates operator, admin, developer, or accountant accounts.
 router.post("/", requireAuth, requireRole("developer"), async (req, res) => {
   const { name, password, role } = req.body;
 
   if (!name || !password || !role) {
     return res.status(400).json({ error: "name, password, and role are required." });
   }
-  if (!["operator", "admin", "developer"].includes(role)) {
-    return res.status(400).json({ error: "role must be operator, admin, or developer." });
+  if (!["operator", "admin", "developer", "accountant"].includes(role)) {
+    return res.status(400).json({ error: "role must be operator, admin, developer, or accountant." });
   }
 
   const passwordError = validatePassword(password);

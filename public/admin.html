@@ -174,7 +174,7 @@
       </div>
 
       <div class="card">
-        <h2>Day-wise Summary</h2>
+        <div class="card-header-row"><h2>Day-wise Summary</h2><button class="secondary" id="download-day-wise-pdf">Download PDF</button></div>
         <table id="day-wise-table">
           <thead>
             <tr>
@@ -191,7 +191,7 @@
       </div>
 
       <div class="card">
-        <h2>Operator-wise Summary</h2>
+        <div class="card-header-row"><h2>Operator-wise Summary</h2><button class="secondary" id="download-operator-wise-pdf">Download PDF</button></div>
         <table id="operator-wise-table">
           <thead>
             <tr>
@@ -208,7 +208,7 @@
       </div>
 
       <div class="card">
-        <h2>Location-wise Summary</h2>
+        <div class="card-header-row"><h2>Location-wise Summary</h2><button class="secondary" id="download-location-wise-pdf">Download PDF</button></div>
         <p style="color:var(--muted); font-size:13px; margin-top:-8px;">
           For bills created in the date range above. Pending reflects each bill's balance as of now, which may be lower than at the time if it's since been paid down.
         </p>
@@ -227,7 +227,7 @@
       </div>
 
       <div class="card">
-        <h2>Category-wise Summary</h2>
+        <div class="card-header-row"><h2>Category-wise Summary</h2><button class="secondary" id="download-category-wise-pdf">Download PDF</button></div>
         <p style="color:var(--muted); font-size:13px; margin-top:-8px;">
           Bill counts for the date range above (e.g. walk-in vs credit).
         </p>
@@ -245,7 +245,7 @@
       </div>
 
       <div class="card">
-        <h2>Company Outstanding Balances</h2>
+        <div class="card-header-row"><h2>Company Outstanding Balances</h2><button class="secondary" id="download-company-outstanding-pdf">Download PDF</button></div>
         <p style="color:var(--muted); font-size:13px; margin-top:-8px;">
           Current balance owed by each company across all its credit bills — not scoped to the date range above.
         </p>
@@ -256,7 +256,7 @@
       </div>
 
       <div class="card">
-        <h2>Client Outstanding Balances</h2>
+        <div class="card-header-row"><h2>Client Outstanding Balances</h2><button class="secondary" id="download-client-outstanding-pdf">Download PDF</button></div>
         <table id="client-outstanding-table">
           <thead><tr><th>Client</th><th>Outstanding Balance</th><th>Pending Bills</th></tr></thead>
           <tbody></tbody>
@@ -264,7 +264,7 @@
       </div>
 
       <div class="card">
-        <h2>Per-Client Detail</h2>
+        <div class="card-header-row"><h2>Per-Client Detail</h2><button class="secondary" id="download-client-detail-pdf">Download PDF</button></div>
         <div class="field combobox-wrapper" style="margin-bottom:12px;">
           <label for="ledger-client-input">Client (type to search)</label>
           <input type="text" id="ledger-client-input" autocomplete="off" placeholder="Start typing a client name" />
@@ -405,6 +405,11 @@
     </div>
   </div>
 
+  <!-- Self-hosted (not CDN) so PDF export keeps working even if the
+       client PC's internet connection is unreliable — this app only
+       needs the LAN connection to the server, nothing else. -->
+  <script src="vendor/jspdf.umd.min.js"></script>
+  <script src="vendor/jspdf.plugin.autotable.min.js"></script>
   <script src="js/common.js"></script>
   <script src="js/admin.js"></script>
 </body>

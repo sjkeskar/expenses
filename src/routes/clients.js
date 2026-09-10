@@ -4,8 +4,9 @@ const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
 
-// GET /api/clients — operator + admin (needed to pick a client when billing).
-router.get("/", requireAuth, requireRole("operator", "admin"), async (req, res) => {
+// GET /api/clients — operator + admin (to pick a client when billing) +
+// accountant (read-only, needed for the Per-Client Detail picker).
+router.get("/", requireAuth, requireRole("operator", "admin", "accountant"), async (req, res) => {
   const clients = await prisma.client.findMany({ orderBy: { name: "asc" } });
   res.json({ clients });
 });

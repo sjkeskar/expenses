@@ -326,3 +326,47 @@ function setupChangePasswordModal() {
     }
   });
 }
+
+// Exports one or more tables into a single downloadable PDF. Runs
+// entirely in the browser (jsPDF + its autotable plugin, both self-hosted
+// under public/vendor/ — no server round-trip, no CDN dependency).
+//
+// sections: [{ heading?, headers: [...], rows: [[...], ...] }, ...]
+// Multiple sections stack top-to-bottom in one PDF (used for the
+// per-client detail export, which combines two tables into one report).
+function downloadPdfReport({ title, subtitle, sections, filename }) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: "landscape" });
+
+  doc.setFontSize(14);
+  doc.setTextColor(20, 35, 31);
+  doc.text(title, 14, 16);
+
+  let cursorY = 22;
+  if (subtitle) {
+    doc.setFontSize(10);
+    doc.setTextColor(93, 107, 103);
+    doc.text(subtitle, 14, cursorY);
+    cursorY += 6;
+  }
+
+  sections.forEach((section) => {
+    if (section.heading) {
+      doc.setFontSize(11);
+      doc.setTextColor(20, 35, 31);
+      doc.text(section.heading, 14, cursorY + 4);
+      cursorY += 8;
+    }
+    doc.autoTable({
+      startY: cursorY,
+      head: [section.headers],
+      body: section.rows,
+      styles: { fontSize: 9, textColor: [23, 35, 31] },
+      headStyles: { fillColor: [31, 110, 92], textColor: [255, 255, 255] },
+      alternateRowStyles: { fillColor: [244, 247, 245] },
+    });
+    cursorY = doc.lastAutoTable.finalY + 10;
+  });
+
+  doc.save(filename);
+}

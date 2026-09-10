@@ -11,6 +11,10 @@ enum Role {
   operator
   admin
   developer
+  // Read-only: full analytics access (same views as admin) plus PDF
+  // export, but no billing, promotion, or lookup-list management. See
+  // src/routes/analytics.js and public/accountant.html/js.
+  accountant
 }
 
 enum BillStatus {

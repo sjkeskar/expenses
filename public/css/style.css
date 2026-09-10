@@ -94,6 +94,15 @@ main {
   color: var(--primary-dark);
 }
 
+.card-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.card-header-row h2 { margin-bottom: 0; }
+
 /* Forms: a real grid instead of ragged flex-wrap, so fields align into
    clean, consistent rows regardless of how many there are. The submit
    button always gets its own full-width row underneath, left-aligned,
@@ -174,6 +183,7 @@ tr:hover td { background: #f5f8f6; }
 .badge.role-operator { background: #e4ebe7; color: var(--primary-dark); }
 .badge.role-admin { background: #fbeed9; color: var(--accent); }
 .badge.role-developer { background: #eae7f7; color: #5849a8; }
+.badge.role-accountant { background: #dcecf0; color: #2a6f80; }
 
 .msg { font-size: 13px; margin-top: 8px; }
 .msg.error { color: var(--danger); }

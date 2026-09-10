@@ -18,6 +18,7 @@ role).
 - **Timezone: the system operates exclusively in India Standard Time (Asia/Kolkata, fixed UTC+5:30, no DST) — never the server's or browser's local timezone.** All timestamp columns (`createdAt`, `updatedAt`, `deletedAt`) are `timestamptz` in Postgres (see `prisma/schema.prisma`), so Postgres always stores the true UTC instant internally regardless of what timezone wrote it — there's no ambiguity to manage at the storage layer. IST enters the picture only at read/display time, via the standard `AT TIME ZONE 'Asia/Kolkata'` SQL conversion (analytics day-bucketing in `src/routes/analytics.js`) or explicit `Intl.DateTimeFormat({ timeZone: 'Asia/Kolkata' })` calls (bill number dates in `src/utils/istDate.js`, frontend display in `public/js/common.js`). If this system is ever deployed for a business outside India, those are the places to change — they must all agree with each other.
 - The Node process is still pinned to `TZ=UTC` (first line of `src/server.js`) as a defensive best practice, but this is no longer load-bearing for correctness now that columns are `timestamptz` — it's just a guard against some other future date-handling code accidentally depending on the server PC's own OS timezone.
 - First developer account: created manually via SQL script (not an auto-seed)
+- Roles: operator, admin, developer, and accountant (read-only — same analytics as admin plus PDF export, no billing/promotion/lookup-list management)
 - Categories are chosen PER BILL, not stored on the client — the same client can have bills under different categories over time. Companies are never managed on their own screen — a company is created automatically (find-or-create by name) as a side effect of adding a "credit" category, and a bill's company is copied from its category, not chosen independently on the bill form
 - Bulk settlement for a company is hand-picked, not FIFO — the person settling sees that company's actual outstanding bills (with client names) and checks off exactly which ones to close in full; anything disputed is simply left unchecked
 - Credit-category bills require a Company; the company's running balance across all its bills is settled via one lump-sum "Settle Company Balance" action, applied oldest-bill-first (FIFO)
@@ -113,6 +114,19 @@ sync the dump folder to a cloud drive (OneDrive/Google Drive). This isn't
 automated by this codebase — set it up as an OS-level scheduled task
 pointing at your Postgres install.
 
+## PDF export (Analytics tab)
+
+Every table on the Analytics tab has a "Download PDF" button. This runs
+entirely in the browser — no server round-trip, no internet dependency —
+using [jsPDF](https://github.com/parallax/jsPDF) and its `autotable`
+plugin. Both are **self-hosted** under `public/vendor/` (not loaded from
+a CDN) specifically so this keeps working even if a client PC's internet
+connection is unreliable — this app only ever needs the LAN connection to
+the server. Both libraries are MIT-licensed; their minified browser
+builds were copied from the published npm packages and aren't part of
+this project's own server-side dependencies (`package.json` is
+untouched).
+
 ## Project structure
 
 ```
@@ -122,7 +136,7 @@ src/config/                  Prisma client + session middleware
 src/middleware/auth.js       requireAuth / requireRole guards
 src/routes/                  auth, users, clients, bills, transactions, analytics
 src/utils/                   bill number generator, password policy
-public/                      login.html, operator.html, admin.html, developer.html + shared css/js
+public/                      login.html, operator.html, admin.html, developer.html, accountant.html + shared css/js
 scripts/                     one-time helpers for creating the first developer account
 ```
 

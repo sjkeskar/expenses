@@ -14,6 +14,19 @@ let currentLedgerClientId = null;
 let selectedCategory = null;
 let settleBills = [];
 
+// Cached from the last successful loadAnalytics()/loadClientDetail() calls,
+// so the Download PDF buttons export exactly what's currently on screen
+// (respecting the active date range) without needing a fresh API call.
+let lastDayWise = [];
+let lastOperatorWise = [];
+let lastLocationWise = [];
+let lastCategoryWise = [];
+let lastCompanyOutstanding = [];
+let lastClientOutstanding = [];
+let lastClientDaily = [];
+let lastClientLedger = [];
+let lastLedgerClientName = "";
+
 async function init() {
   const user = await guardPage("admin");
   if (!user) return;
@@ -28,6 +41,7 @@ async function init() {
 
   document.getElementById("logout-btn").addEventListener("click", logout);
   setupChangePasswordModal();
+  setupAnalyticsDownloads();
   setupTabs();
   setupComboboxes();
   setupDateRange();
@@ -440,6 +454,13 @@ async function loadAnalytics() {
     api("/analytics/client-outstanding"),
   ]);
 
+  lastDayWise = dayWise.dayWise;
+  lastOperatorWise = operatorWise.operatorWise;
+  lastLocationWise = locationWise.locationWise;
+  lastCategoryWise = categoryWise.categoryWise;
+  lastCompanyOutstanding = companyOutstanding.companyOutstanding;
+  lastClientOutstanding = clientOutstanding.clientOutstanding;
+
   document.querySelector("#day-wise-table tbody").innerHTML = dayWise.dayWise
     .map(
       (r) => `
@@ -520,6 +541,11 @@ async function loadClientDetail() {
     api(`/analytics/client-daily/${currentLedgerClientId}${qs}`),
     api(`/analytics/client-ledger/${currentLedgerClientId}`),
   ]);
+
+  lastClientDaily = daily.clientDaily;
+  lastClientLedger = ledger.ledger;
+  const selectedClient = clients.find((c) => c.id === currentLedgerClientId);
+  lastLedgerClientName = selectedClient ? selectedClient.name : "";
 
   document.querySelector("#client-daily-table tbody").innerHTML = daily.clientDaily
     .map(
@@ -690,5 +716,160 @@ document.getElementById("add-category-form").addEventListener("submit", async (e
     showMessage(msg, err.message, true);
   }
 });
+
+// ---------- PDF exports ----------
+
+function setupAnalyticsDownloads() {
+  const todayStr = () => getTodayIstDateString();
+  const rangeSubtitle = () => document.getElementById("range-label").textContent;
+  const snapshotSubtitle = () => `As of ${formatDateTime(new Date())}`;
+
+  document.getElementById("download-day-wise-pdf").addEventListener("click", () => {
+    downloadPdfReport({
+      title: "Day-wise Summary",
+      subtitle: rangeSubtitle(),
+      sections: [
+        {
+          headers: ["Day", "Total Collected", "Transactions", "Cash", "Credit Card", "UPI"],
+          rows: lastDayWise.map((r) => [
+            formatDate(r.day),
+            formatCurrency(r.total_collected),
+            r.transaction_count,
+            `${r.cash_count} (${formatCurrency(r.cash_total)})`,
+            `${r.credit_card_count} (${formatCurrency(r.credit_card_total)})`,
+            `${r.upi_count} (${formatCurrency(r.upi_total)})`,
+          ]),
+        },
+      ],
+      filename: `day-wise-summary_${todayStr()}.pdf`,
+    });
+  });
+
+  document.getElementById("download-operator-wise-pdf").addEventListener("click", () => {
+    downloadPdfReport({
+      title: "Operator-wise Summary",
+      subtitle: rangeSubtitle(),
+      sections: [
+        {
+          headers: ["Operator", "Total Billed", "Discount Given", "Amount Collected", "Bills Created", "Payments Taken"],
+          rows: lastOperatorWise.map((r) => [
+            r.operatorName,
+            formatCurrency(r.totalBilled || 0),
+            formatCurrency(r.totalDiscount || 0),
+            formatCurrency(r.totalCollected || 0),
+            r.billsCreated || 0,
+            r.transactionCount || 0,
+          ]),
+        },
+      ],
+      filename: `operator-wise-summary_${todayStr()}.pdf`,
+    });
+  });
+
+  document.getElementById("download-location-wise-pdf").addEventListener("click", () => {
+    downloadPdfReport({
+      title: "Location-wise Summary",
+      subtitle: rangeSubtitle(),
+      sections: [
+        {
+          headers: ["Location", "Total Billed", "Discount Given", "Pending Amount", "Bills Created"],
+          rows: lastLocationWise.map((r) => [
+            r.location_name,
+            formatCurrency(r.total_billed || 0),
+            formatCurrency(r.total_discount || 0),
+            formatCurrency(r.total_pending || 0),
+            r.bills_created || 0,
+          ]),
+        },
+      ],
+      filename: `location-wise-summary_${todayStr()}.pdf`,
+    });
+  });
+
+  document.getElementById("download-category-wise-pdf").addEventListener("click", () => {
+    downloadPdfReport({
+      title: "Category-wise Summary",
+      subtitle: rangeSubtitle(),
+      sections: [
+        {
+          headers: ["Category", "Behavior", "Bills", "Total Billed"],
+          rows: lastCategoryWise.map((r) => [
+            r.category_name,
+            r.category_type || "—",
+            r.bill_count || 0,
+            formatCurrency(r.total_billed || 0),
+          ]),
+        },
+      ],
+      filename: `category-wise-summary_${todayStr()}.pdf`,
+    });
+  });
+
+  document.getElementById("download-company-outstanding-pdf").addEventListener("click", () => {
+    downloadPdfReport({
+      title: "Company Outstanding Balances",
+      subtitle: snapshotSubtitle(),
+      sections: [
+        {
+          headers: ["Company", "Outstanding Balance", "Pending Bills"],
+          rows: lastCompanyOutstanding.map((r) => [
+            r.company_name,
+            formatCurrency(r.outstanding_balance),
+            r.pending_bill_count,
+          ]),
+        },
+      ],
+      filename: `company-outstanding_${todayStr()}.pdf`,
+    });
+  });
+
+  document.getElementById("download-client-outstanding-pdf").addEventListener("click", () => {
+    downloadPdfReport({
+      title: "Client Outstanding Balances",
+      subtitle: snapshotSubtitle(),
+      sections: [
+        {
+          headers: ["Client", "Outstanding Balance", "Pending Bills"],
+          rows: lastClientOutstanding.map((r) => [
+            r.client_name,
+            formatCurrency(r.outstanding_balance),
+            r.pending_bill_count,
+          ]),
+        },
+      ],
+      filename: `client-outstanding_${todayStr()}.pdf`,
+    });
+  });
+
+  document.getElementById("download-client-detail-pdf").addEventListener("click", () => {
+    if (!currentLedgerClientId) {
+      alert("Select a client in Per-Client Detail first.");
+      return;
+    }
+    downloadPdfReport({
+      title: `Client Detail — ${lastLedgerClientName}`,
+      subtitle: `Per-day summary: ${rangeSubtitle()} · Bill ledger: full history`,
+      sections: [
+        {
+          heading: "Per-day summary",
+          headers: ["Day", "Total Collected", "Transactions"],
+          rows: lastClientDaily.map((r) => [formatDate(r.day), formatCurrency(r.total_collected), r.transaction_count]),
+        },
+        {
+          heading: "Bill ledger",
+          headers: ["Bill #", "Net Amount", "Balance", "Status", "Payments"],
+          rows: lastClientLedger.map((b) => [
+            b.billNumber,
+            formatCurrency(b.netAmount),
+            formatCurrency(b.balance),
+            b.status === "fully_paid" ? "Fully Paid" : "Pending",
+            b.transactions.map((t) => `${formatCurrency(t.amountCollected)} (${t.mode}, ${t.operator.name})`).join("; ") || "—",
+          ]),
+        },
+      ],
+      filename: `client-detail_${lastLedgerClientName.replace(/\s+/g, "-").toLowerCase()}_${todayStr()}.pdf`,
+    });
+  });
+}
 
 init();

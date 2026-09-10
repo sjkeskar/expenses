@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Accountant — Payment Tracking System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>Payment Tracking System — Accountant</h1>
+    <div class="session-info">
+      <span id="user-name"></span>
+      <button class="secondary" id="change-password-btn">Change Password</button>
+      <button class="secondary" id="logout-btn">Log out</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="reminder" class="reminder-banner" style="display:none;"></div>
+
+    <p style="color:var(--muted); font-size:13px; margin-top:-8px; margin-bottom:20px;">
+      Read-only view — same analytics admin sees, plus PDF export. No billing or account management access.
+    </p>
+
+    
+      <div class="card">
+        <h2>Date Range</h2>
+        <form id="date-range-form" class="inline-form">
+          <div class="field">
+            <label for="start-date">From</label>
+            <input type="date" id="start-date" />
+          </div>
+          <div class="field">
+            <label for="end-date">To</label>
+            <input type="date" id="end-date" />
+          </div>
+          <button type="submit">Apply</button>
+          <button type="button" class="secondary" id="clear-date-range">Clear (all time)</button>
+        </form>
+        <p id="range-label" style="color:var(--muted); font-size:13px; margin-bottom:0;">Showing: today</p>
+      </div>
+
+      <div class="card">
+        <div class="card-header-row"><h2>Day-wise Summary</h2><button class="secondary" id="download-day-wise-pdf">Download PDF</button></div>
+        <table id="day-wise-table">
+          <thead>
+            <tr>
+              <th>Day</th>
+              <th>Total Collected</th>
+              <th>Transactions</th>
+              <th>Cash</th>
+              <th>Credit Card</th>
+              <th>UPI</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="card-header-row"><h2>Operator-wise Summary</h2><button class="secondary" id="download-operator-wise-pdf">Download PDF</button></div>
+        <table id="operator-wise-table">
+          <thead>
+            <tr>
+              <th>Operator</th>
+              <th>Total Billed</th>
+              <th>Discount Given</th>
+              <th>Amount Collected</th>
+              <th>Bills Created</th>
+              <th>Payments Taken</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="card-header-row"><h2>Location-wise Summary</h2><button class="secondary" id="download-location-wise-pdf">Download PDF</button></div>
+        <p style="color:var(--muted); font-size:13px; margin-top:-8px;">
+          For bills created in the date range above. Pending reflects each bill's balance as of now, which may be lower than at the time if it's since been paid down.
+        </p>
+        <table id="location-wise-table">
+          <thead>
+            <tr>
+              <th>Location</th>
+              <th>Total Billed</th>
+              <th>Discount Given</th>
+              <th>Pending Amount</th>
+              <th>Bills Created</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="card-header-row"><h2>Category-wise Summary</h2><button class="secondary" id="download-category-wise-pdf">Download PDF</button></div>
+        <p style="color:var(--muted); font-size:13px; margin-top:-8px;">
+          Bill counts for the date range above (e.g. walk-in vs credit).
+        </p>
+        <table id="category-wise-table">
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th>Behavior</th>
+              <th>Bills</th>
+              <th>Total Billed</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="card-header-row"><h2>Company Outstanding Balances</h2><button class="secondary" id="download-company-outstanding-pdf">Download PDF</button></div>
+        <p style="color:var(--muted); font-size:13px; margin-top:-8px;">
+          Current balance owed by each company across all its credit bills — not scoped to the date range above.
+        </p>
+        <table id="company-outstanding-table">
+          <thead><tr><th>Company</th><th>Outstanding Balance</th><th>Pending Bills</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="card-header-row"><h2>Client Outstanding Balances</h2><button class="secondary" id="download-client-outstanding-pdf">Download PDF</button></div>
+        <table id="client-outstanding-table">
+          <thead><tr><th>Client</th><th>Outstanding Balance</th><th>Pending Bills</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="card-header-row"><h2>Per-Client Detail</h2><button class="secondary" id="download-client-detail-pdf">Download PDF</button></div>
+        <div class="field combobox-wrapper" style="margin-bottom:12px;">
+          <label for="ledger-client-input">Client (type to search)</label>
+          <input type="text" id="ledger-client-input" autocomplete="off" placeholder="Start typing a client name" />
+          <input type="hidden" id="ledger-client-id" />
+          <div id="ledger-client-dropdown" class="combobox-list" style="display:none;"></div>
+        </div>
+        <h3 style="font-size:14px;color:var(--muted);">Per-day summary (respects the date range above)</h3>
+        <table id="client-daily-table">
+          <thead><tr><th>Day</th><th>Total Collected</th><th>Transactions</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <h3 style="font-size:14px;color:var(--muted);margin-top:16px;">Bill ledger (full history)</h3>
+        <table id="client-ledger-table">
+          <thead><tr><th>Bill #</th><th>Net Amount</th><th>Balance</th><th>Status</th><th>Payments</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+  </main>
+
+  <!-- Change Password modal (shared markup pattern across all role pages) -->
+  <div id="change-password-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-box">
+      <h2>Change Password</h2>
+      <form id="change-password-form">
+        <div class="field">
+          <label for="current-password">Current password</label>
+          <input type="password" id="current-password" required />
+        </div>
+        <div class="field">
+          <label for="new-password">New password</label>
+          <input type="password" id="new-password" required />
+        </div>
+        <div class="field">
+          <label for="confirm-new-password">Confirm new password</label>
+          <input type="password" id="confirm-new-password" required />
+        </div>
+        <p style="color:var(--muted); font-size:12px; margin:0;">
+          Must be at least 6 characters, with at least one number and one special character.
+        </p>
+        <div class="modal-actions">
+          <button type="button" class="secondary" id="change-password-cancel">Cancel</button>
+          <button type="submit">Change Password</button>
+        </div>
+      </form>
+      <div id="change-password-msg" class="msg"></div>
+    </div>
+  </div>
+
+  <!-- Self-hosted (not CDN) so PDF export keeps working even if the
+       client PC's internet connection is unreliable — this app only
+       needs the LAN connection to the server, nothing else. -->
+  <script src="vendor/jspdf.umd.min.js"></script>
+  <script src="vendor/jspdf.plugin.autotable.min.js"></script>
+  <script src="js/common.js"></script>
+  <script src="js/accountant.js"></script>
+</body>
+</html>

@@ -5,8 +5,10 @@ const { parseDateRange } = require("../utils/dateRange");
 
 const router = express.Router();
 
-// All analytics routes are admin-only (confirmed decision).
-router.use(requireAuth, requireRole("admin"));
+// Admin and accountant both get full analytics access — accountant is a
+// read-only role scoped exactly to this (plus PDF export, handled
+// entirely client-side). No billing, promotion, or lookup-list access.
+router.use(requireAuth, requireRole("admin", "accountant"));
 
 // GET /api/analytics/day-wise?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
 // Total collected per day, plus a per-payment-mode breakdown (count +
