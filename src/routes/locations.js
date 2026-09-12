@@ -4,23 +4,36 @@ const { requireAuth, requireRole } = require("../middleware/auth");
 
 const router = express.Router();
 
+const LOCATION_CODE_REGEX = /^\d{2}$/;
+
 // GET /api/locations — operator + admin. Active locations only, for the
 // typeable location picker on the Create Bill form.
 router.get("/", requireAuth, requireRole("operator", "admin"), async (req, res) => {
   const locations = await prisma.location.findMany({
     where: { isActive: true },
-    select: { id: true, name: true, createdAt: true },
+    select: { id: true, name: true, locationCode: true, createdAt: true },
     orderBy: { name: "asc" },
   });
   res.json({ locations });
 });
 
 // POST /api/locations — admin only. Adds a new location to the fixed list.
+// Body: { name, locationCode }
+//
+// locationCode is a required 2-digit string (e.g. "04") used as the
+// prefix of every bill_number generated at this location. It is
+// deliberately NOT unique — multiple locations can share the same code
+// (confirmed decision) — unlike `name`, which stays unique as before.
 router.post("/", requireAuth, requireRole("admin"), async (req, res) => {
-  const { name } = req.body;
+  const { name, locationCode } = req.body;
   const trimmedName = (name || "").trim();
+  const trimmedCode = (locationCode || "").trim();
+
   if (!trimmedName) {
     return res.status(400).json({ error: "Location name is required." });
+  }
+  if (!LOCATION_CODE_REGEX.test(trimmedCode)) {
+    return res.status(400).json({ error: "Location code must be exactly 2 digits (e.g. 04)." });
   }
 
   const existing = await prisma.location.findFirst({
@@ -31,18 +44,19 @@ router.post("/", requireAuth, requireRole("admin"), async (req, res) => {
       return res.status(409).json({ error: "A location with that name already exists." });
     }
     // Reviving a previously-deleted location with the same name, rather
-    // than creating a duplicate row.
+    // than creating a duplicate row. The code can be updated on revival
+    // in case it needs to change.
     const revived = await prisma.location.update({
       where: { id: existing.id },
-      data: { isActive: true },
-      select: { id: true, name: true },
+      data: { isActive: true, locationCode: trimmedCode },
+      select: { id: true, name: true, locationCode: true },
     });
     return res.status(201).json({ location: revived });
   }
 
   const location = await prisma.location.create({
-    data: { name: trimmedName },
-    select: { id: true, name: true },
+    data: { name: trimmedName, locationCode: trimmedCode },
+    select: { id: true, name: true, locationCode: true },
   });
   res.status(201).json({ location });
 });

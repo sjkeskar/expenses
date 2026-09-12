@@ -3,6 +3,7 @@ let locations = [];
 let categories = [];
 let companies = [];
 let bills = [];
+let currentUserId = null;
 let clientCombobox = null;
 let locationCombobox = null;
 let categoryCombobox = null;
@@ -14,6 +15,7 @@ let settleBills = [];
 async function init() {
   const user = await guardPage("operator");
   if (!user) return;
+  currentUserId = user.id;
   document.getElementById("user-name").textContent = `${user.name} (operator)`;
 
   const reminder = sessionStorage.getItem("sessionReminder");
@@ -50,6 +52,7 @@ function setupComboboxes() {
     hiddenInput: document.getElementById("bill-location-id"),
     items: [],
     renderLabel: (l) => l.name,
+    renderSub: (l) => `Code: ${l.locationCode}`,
   });
 
   categoryCombobox = attachCombobox({
@@ -172,12 +175,18 @@ async function loadCompanies() {
 
 async function loadBills() {
   const data = await api("/bills");
-  bills = data.bills;
+  bills = data.bills; // full list — needed so Record Payment can top up ANY pending bill, not just your own
+
+  // The visible table only shows bills YOU created — see the note in the
+  // card for why: it's your personal work log, not the shop-wide total
+  // (that's what Analytics is for, on the admin/accountant side).
+  const myBills = bills.filter((b) => b.createdBy && b.createdBy.id === currentUserId);
 
   const tbody = document.querySelector("#bills-table tbody");
-  tbody.innerHTML = bills
-    .map(
-      (b) => `
+  tbody.innerHTML = myBills
+    .map((b) => {
+      const collected = Number(b.netAmount) - Number(b.balance);
+      return `
       <tr>
         <td>${b.billNumber}</td>
         <td>${b.client.name}</td>
@@ -185,12 +194,29 @@ async function loadBills() {
         <td>${b.company ? b.company.name : "—"}</td>
         <td>${b.location ? b.location.name : "—"}</td>
         <td>${formatCurrency(b.netAmount)}</td>
+        <td>${formatCurrency(collected)}</td>
+        <td>${formatCurrency(b.discountAmount)}</td>
         <td>${formatCurrency(b.balance)}</td>
         <td><span class="badge ${b.status}">${b.status === "fully_paid" ? "Fully Paid" : "Pending"}</span></td>
         <td>${formatDateTime(b.createdAt)}</td>
-      </tr>`
-    )
+      </tr>`;
+    })
     .join("");
+
+  const totals = myBills.reduce(
+    (acc, b) => {
+      acc.billed += Number(b.originalAmount);
+      acc.collected += Number(b.netAmount) - Number(b.balance);
+      acc.discount += Number(b.discountAmount);
+      acc.outstanding += Number(b.balance);
+      return acc;
+    },
+    { billed: 0, collected: 0, discount: 0, outstanding: 0 }
+  );
+  document.getElementById("my-bills-summary").textContent =
+    `Total bills: ${myBills.length} — Billed: ${formatCurrency(totals.billed)}, ` +
+    `Collected: ${formatCurrency(totals.collected)}, Discount: ${formatCurrency(totals.discount)}, ` +
+    `Outstanding: ${formatCurrency(totals.outstanding)}`;
 
   const pendingBills = bills.filter((b) => b.status === "pending");
   billCombobox.updateItems(pendingBills);
@@ -266,6 +292,7 @@ document.getElementById("transaction-form").addEventListener("submit", async (e)
   const msg = document.getElementById("tx-msg");
   const billId = document.getElementById("tx-bill-id").value;
   const amountCollected = document.getElementById("tx-amount").value;
+  const discountAmount = document.getElementById("tx-discount").value;
   const mode = document.getElementById("tx-mode").value;
 
   if (!billId) {
@@ -274,10 +301,17 @@ document.getElementById("transaction-form").addEventListener("submit", async (e)
   }
 
   try {
-    await api("/transactions", { method: "POST", body: { billId, amountCollected, mode } });
-    showMessage(msg, "Payment recorded.", false);
+    await api("/transactions", { method: "POST", body: { billId, amountCollected, discountAmount, mode } });
+    showMessage(
+      msg,
+      Number(discountAmount) > 0
+        ? `Payment recorded — ${formatCurrency(amountCollected)} collected plus ${formatCurrency(discountAmount)} discount applied.`
+        : "Payment recorded.",
+      false
+    );
     billCombobox.clear();
     document.getElementById("tx-amount").value = "";
+    document.getElementById("tx-discount").value = "0";
     await loadBills();
   } catch (err) {
     showMessage(msg, err.message, true);

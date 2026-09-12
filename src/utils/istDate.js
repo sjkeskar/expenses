@@ -40,12 +40,19 @@ function isValidDateString(value) {
   );
 }
 
-// 'YYYY-MM-DD' -> 'DDMMYYYY', for turning a bill date into its bill_number
-// prefix. Pure string reformatting — no timezone math needed here, since
-// the input is already an IST calendar date, not an instant.
-function dateStringToBillNumberKey(dateString) {
-  const [year, month, day] = dateString.split("-");
-  return `${day}${month}${year}`;
+// 2-digit location code + 'YY' + 'MM' -> e.g. "04" + "2026-09-15" -> "042609".
+// This is the BillCounter key (and bill_number prefix) — it deliberately
+// mixes location and calendar month together, because multiple locations
+// can share the same code (confirmed decision), and the sequence counter
+// needs to be scoped to exactly what appears in the printed bill number
+// to guarantee no two bills ever collide. Pure string reformatting for
+// the date part — no timezone math needed, since dateString is already
+// an IST calendar date, not an instant.
+function buildBillCounterKey(locationCode, dateString) {
+  const year = dateString.slice(0, 4);
+  const month = dateString.slice(5, 7);
+  const yy = year.slice(2, 4);
+  return `${locationCode}${yy}${month}`;
 }
 
 // Combines a chosen IST calendar date with the CURRENT wall-clock time
@@ -75,6 +82,6 @@ module.exports = {
   getIstDateKey,
   getIstDateString,
   isValidDateString,
-  dateStringToBillNumberKey,
+  buildBillCounterKey,
   combineDateWithCurrentIstTime,
 };

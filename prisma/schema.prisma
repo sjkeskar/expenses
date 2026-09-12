@@ -136,8 +136,20 @@ model Company {
 model Location {
   id        String   @id @default(uuid())
   name      String   @unique
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  // 2-digit code set by admin when the location is added — used as the
+  // prefix of every bill_number generated at this location. Deliberately
+  // NOT unique: multiple locations can share the same code (confirmed
+  // decision), which is why the bill-number sequence counter is keyed by
+  // this code + year + month TOGETHER (see BillCounter below), not by
+  // the location itself — otherwise two locations sharing a code could
+  // generate colliding bill numbers.
+  //
+  // Required (no nullable-for-backward-compatibility escape hatch like
+  // locationId/categoryId on Bill) — every location must have one before
+  // this migration runs, which is why test data gets truncated first.
+  locationCode String   @db.VarChar(2)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
 
   bills Bill[]
 
@@ -146,10 +158,10 @@ model Location {
 
 // ---------------------------------------------------------------------------
 // bills
-// - billNumber: human-readable sequential number, format DDMMYYYYNNNNN
-//   (no separator), counter resets daily — confirmed decision.
-//   Generated via BillCounter below, not by the DB serial type, because the
-//   counter must reset per calendar day rather than increment forever.
+// - billNumber format: {locationCode}{YY}{MM}{seq} — e.g. "0426090042"
+//   (location code 04, year 2026, month 09, sequence 0042). No separator.
+//   seq is 4 digits, 0000-9999, and resets every MONTH (not daily) for
+//   each distinct locationCode — see BillCounter below.
 // ---------------------------------------------------------------------------
 model Bill {
   id             String     @id @default(uuid())
@@ -194,11 +206,14 @@ model Bill {
 }
 
 // ---------------------------------------------------------------------------
-// bill_counters — one row per calendar day (dateKey = DDMMYYYY),
-// incremented atomically inside a transaction to produce bill_number.
+// bill_counters — one row per (locationCode + YY + MM) combination — e.g.
+// "042609" for code 04, year 2026, month 09. lastSequence starts at 0 for
+// the first bill in that bucket (not 1), incrementing by 1 per bill
+// thereafter, up to a max of 9999 (4-digit sequence in the bill number).
+// Incremented atomically inside a transaction to produce bill_number.
 // ---------------------------------------------------------------------------
 model BillCounter {
-  dateKey      String @id
+  counterKey   String @id
   lastSequence Int    @default(0)
 
   @@map("bill_counters")
@@ -215,6 +230,12 @@ model Transaction {
   clientId        String
   client          Client      @relation(fields: [clientId], references: [id])
   amountCollected Decimal     @db.Decimal(12, 2)
+  // Additional discount given AT PAYMENT TIME, on top of whatever
+  // discount the bill already had from creation. Tracked per-transaction
+  // (not just folded silently into the bill) so the ledger shows exactly
+  // when and by whom each discount was given — see transactions.js for
+  // how this keeps Bill.discountAmount/netAmount/balance all in sync.
+  discountAmount  Decimal     @default(0) @db.Decimal(12, 2)
   mode            PaymentMode
   operatorId      String
   operator        User        @relation("OperatorTransactions", fields: [operatorId], references: [id])

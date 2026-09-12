@@ -223,7 +223,7 @@ async function loadClientDetail() {
   document.querySelector("#client-ledger-table tbody").innerHTML = ledger.ledger
     .map((b) => {
       const payments = b.transactions
-        .map((t) => `${formatCurrency(t.amountCollected)} (${t.mode}, ${t.operator.name})`)
+        .map((t) => `${formatCurrency(t.amountCollected)}${Number(t.discountAmount) > 0 ? ` + ${formatCurrency(t.discountAmount)} discount` : ""} (${t.mode}, ${t.operator.name})`)
         .join("; ") || "—";
       return `<tr>
         <td>${b.billNumber}</td>
@@ -382,7 +382,7 @@ function setupAnalyticsDownloads() {
             formatCurrency(b.netAmount),
             formatCurrency(b.balance),
             b.status === "fully_paid" ? "Fully Paid" : "Pending",
-            b.transactions.map((t) => `${formatCurrency(t.amountCollected)} (${t.mode}, ${t.operator.name})`).join("; ") || "—",
+            b.transactions.map((t) => `${formatCurrency(t.amountCollected)}${Number(t.discountAmount) > 0 ? ` + ${formatCurrency(t.discountAmount)} discount` : ""} (${t.mode}, ${t.operator.name})`).join("; ") || "—",
           ]),
         },
       ],

@@ -6,7 +6,7 @@ const { VALID_MODES } = require("../utils/paymentModes");
 const {
   getIstDateString,
   isValidDateString,
-  dateStringToBillNumberKey,
+  buildBillCounterKey,
   combineDateWithCurrentIstTime,
 } = require("../utils/istDate");
 
@@ -20,6 +20,7 @@ router.get("/", requireAuth, requireRole("operator", "admin"), async (req, res) 
       location: { select: { id: true, name: true } },
       category: { select: { id: true, name: true, type: true } },
       company: { select: { id: true, name: true } },
+      createdBy: { select: { id: true, name: true } },
     },
     orderBy: { createdAt: "desc" },
   });
@@ -35,6 +36,7 @@ router.get("/:id", requireAuth, requireRole("operator", "admin"), async (req, re
       location: { select: { id: true, name: true } },
       category: { select: { id: true, name: true, type: true } },
       company: { select: { id: true, name: true } },
+      createdBy: { select: { id: true, name: true } },
       transactions: {
         where: { isDeleted: false },
         include: { operator: { select: { id: true, name: true } } },
@@ -76,10 +78,10 @@ router.get("/:id", requireAuth, requireRole("operator", "admin"), async (req, re
 //
 // billDate ('YYYY-MM-DD', IST calendar day) lets a bill be created for
 // ANY date, not just today — defaults to today (IST) if omitted. This
-// controls both the bill_number's DDMMYYYY prefix and the bill's
-// (and, if applicable, its initial payment's) createdAt timestamp, so a
-// backdated bill sorts and buckets in analytics under the date it's
-// actually for, not the date someone happened to enter it.
+// controls both the bill_number's {locationCode}{YY}{MM} prefix and the
+// bill's (and, if applicable, its initial payment's) createdAt
+// timestamp, so a backdated bill sorts and buckets in analytics under
+// the date it's actually for, not the date someone happened to enter it.
 router.post("/", requireAuth, requireRole("operator", "admin"), async (req, res) => {
   const {
     clientId,
@@ -189,8 +191,8 @@ router.post("/", requireAuth, requireRole("operator", "admin"), async (req, res)
         resolvedCompanyId = category.companyId;
       }
 
-      const billNumberDateKey = dateStringToBillNumberKey(resolvedBillDate);
-      const billNumber = await generateBillNumber(tx, billNumberDateKey);
+      const counterKey = buildBillCounterKey(location.locationCode, resolvedBillDate);
+      const billNumber = await generateBillNumber(tx, counterKey);
       const billTimestamp = combineDateWithCurrentIstTime(resolvedBillDate);
       const balance = netAmount - initialAmount;
 

@@ -99,6 +99,10 @@
             <input type="number" id="tx-amount" min="0.01" step="0.01" required />
           </div>
           <div class="field">
+            <label for="tx-discount">Additional discount (optional)</label>
+            <input type="number" id="tx-discount" min="0" step="0.01" value="0" />
+          </div>
+          <div class="field">
             <label for="tx-mode">Mode</label>
             <select id="tx-mode" required>
               <option value="cash">Cash</option>
@@ -144,10 +148,14 @@
       </div>
 
       <div class="card">
-        <h2>Bills</h2>
+        <h2>My Bills</h2>
+        <p style="color:var(--muted); font-size:13px; margin-top:-8px;">
+          Only bills you personally created — not the full shop total. Use Record Payment above to top up any pending bill regardless of who created it.
+        </p>
+        <p id="my-bills-summary" style="color:var(--muted); font-size:13px;"></p>
         <table id="bills-table">
           <thead>
-            <tr><th>Bill #</th><th>Client</th><th>Category</th><th>Company</th><th>Location</th><th>Net Amount</th><th>Balance</th><th>Status</th><th>Created</th></tr>
+            <tr><th>Bill #</th><th>Client</th><th>Category</th><th>Company</th><th>Location</th><th>Net Amount</th><th>Collected</th><th>Discount</th><th>Balance</th><th>Status</th><th>Created</th></tr>
           </thead>
           <tbody></tbody>
         </table>
@@ -309,12 +317,17 @@
         <h2>Add Location</h2>
         <p style="color:var(--muted); font-size:13px;">
           This is the fixed list of shop locations operators can pick from when creating a bill.
-          Only admin can add or remove locations.
+          Only admin can add or remove locations. The 2-digit code is used as the prefix of every
+          bill number generated at that location — multiple locations may share the same code.
         </p>
         <form id="add-location-form" class="inline-form">
           <div class="field">
             <label for="new-location-name">Location name</label>
             <input type="text" id="new-location-name" required />
+          </div>
+          <div class="field">
+            <label for="new-location-code">Location code (2 digits)</label>
+            <input type="text" id="new-location-code" inputmode="numeric" pattern="\d{2}" maxlength="2" placeholder="e.g. 04" required />
           </div>
           <button type="submit">Add Location</button>
         </form>
@@ -324,7 +337,7 @@
       <div class="card">
         <h2>Locations</h2>
         <table id="locations-table">
-          <thead><tr><th>Name</th><th>Added</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Name</th><th>Code</th><th>Added</th><th>Actions</th></tr></thead>
           <tbody></tbody>
         </table>
         <div id="location-action-msg" class="msg"></div>
