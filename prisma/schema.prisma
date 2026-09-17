@@ -79,12 +79,6 @@ model Client {
 }
 
 // ---------------------------------------------------------------------------
-// categories — chosen per bill (not stored on the client — the same client
-// could be billed under different categories on different bills). Admin-
-// managed list, like locations. "type" determines what the bill form asks
-// for: standard = nothing extra; credit = a Company is also required.
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
 // categories — chosen per bill (not stored on the client). Admin-managed.
 // "type" determines behavior: standard = nothing extra; credit = this
 // category IS tied to one company (companyId), set when the category is

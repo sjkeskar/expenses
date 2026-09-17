@@ -108,6 +108,12 @@ psql -U ptsuser -d payment_tracking -f scripts/reset-test-data.sql
 This is destructive and has no undo except restoring a backup. Only run
 it against test/staging data, never production.
 
+For go-live day (or setting up a fresh testing device from an existing
+copy of this project), see "Consolidating Migrations (Full Reset)" in
+`SETUP_GUIDE.md` — a stronger, one-script reset that also collapses the
+accumulated migration history into a single migration. That one wipes
+user accounts too, unlike the script above.
+
 ## Backups
 
 Per the spec: schedule a nightly `pg_dump` via Windows Task Scheduler and

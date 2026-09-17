@@ -208,6 +208,87 @@ A ready-to-use script is at `scripts/backup.bat`.
 
 ---
 
+## Consolidating Migrations (Full Reset)
+
+Every migration command given throughout this project's development
+(`add_bill_created_by`, `add_locations`, `add_categories_and_companies`,
+`timestamptz`, `add_accountant_role`, `bill_number_location_code`, and
+others) was run directly against your live server's database — this
+project's `prisma/` folder ships with only `schema.prisma`, no
+`migrations/` folder, because there's never been a database available to
+generate one against ahead of time. Over time this leaves a long chain of
+incremental migrations on your actual server.
+
+This isn't just cosmetic: if you ever copy this project folder (with its
+accumulated `prisma/migrations/` history) onto a **new device** to set
+up a fresh database there, running `npx prisma migrate dev --name init`
+replays the *entire* migration history on that new device, regardless of
+what you name the command — `--name` only applies to a genuinely new
+migration, and there won't be one if `schema.prisma` already matches
+what the existing migrations capture. Consolidating down to one
+migration makes every future fresh setup (new device, new environment)
+actually match the "just run one migration" expectation.
+
+**This is fully destructive — it wipes ALL data, including every user
+account.** Only do this once, right before go-live (or before setting up
+a new testing device from scratch) — not something to run routinely.
+This is more thorough than `reset-test-data.sql`, which deliberately
+keeps users and the schema; this wipes both.
+
+### Recommended: run the script
+
+```
+.\scripts\consolidate-migrations.ps1
+```
+
+This one PowerShell script does the whole thing in order — drops and
+recreates the schema, deletes the old migration history, generates and
+applies one consolidated migration, and creates your first developer
+account — asking for confirmation and the details it needs (DB name, DB
+user, developer login name and password) along the way. Run it from the
+project root in PowerShell.
+
+### What it's doing (manual steps, if you'd rather run them yourself)
+
+1. Stop the app (stop the NSSM service, or Ctrl+C a manually-running `npm start`).
+
+2. Drop and recreate the database schema — this wipes every table AND
+   Prisma's own migration-history tracking table, giving a truly clean
+   slate:
+   ```
+   psql -U postgres -d payment_tracking -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public; GRANT ALL ON SCHEMA public TO ptsuser; CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+   ```
+   (Re-granting schema privileges and recreating the `pgcrypto` extension
+   here because `DROP SCHEMA CASCADE` removes those too — see Phase 1.)
+
+3. Delete the old migration history from the project folder:
+   ```
+   Remove-Item -Recurse -Force prisma\migrations
+   ```
+   (PowerShell. In Command Prompt: `rmdir /s /q prisma\migrations`.)
+
+4. Generate one fresh migration reflecting the current `schema.prisma`
+   and apply it to the now-empty database:
+   ```
+   npx prisma migrate dev --name init
+   ```
+   This creates a single new `prisma/migrations/<timestamp>_init/` folder
+   containing every table, enum, and column as they exist today — no
+   incremental history, just the current state in one file.
+
+5. Redo the one-time setup that was wiped along with the data:
+   - Recreate the first developer account (Phase 3 above, or let the
+     script do this step for you).
+   - Re-add your real operator/admin/accountant accounts.
+   - Re-add Locations (with their 2-digit codes), Categories (linking
+     credit ones to a company), and Companies.
+
+From this point on, the migration history starts clean again — the next
+schema change will be migration #2, not #11. If you set up another new
+device afterward, copy the project folder *after* running this, so the
+fresh `prisma/migrations/` (just the one `init` migration) comes along
+with it instead of the old long chain.
+
 ## If Something Breaks
 
 - **`migrate dev` fails with `permission denied for schema public`:** on Postgres 15+, only the database owner gets `CREATE` rights on the `public` schema by default. Fix:
