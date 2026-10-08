@@ -4,6 +4,8 @@ let categories = [];
 let companies = [];
 let bills = [];
 let currentUserId = null;
+let myBillsCache = [];
+let myBillsTotals = { billed: 0, net: 0, collected: 0, discount: 0, outstanding: 0 };
 let clientCombobox = null;
 let locationCombobox = null;
 let categoryCombobox = null;
@@ -14,6 +16,21 @@ let ledgerClientCombobox = null;
 let currentLedgerClientId = null;
 let selectedCategory = null;
 let settleBills = [];
+let pendingRefundBillId = null;
+
+// Once a bill is refunded, balance is force-zeroed by the refund itself
+// (not reached through normal payment), so "netAmount - balance" stops
+// being a valid way to read off "amount collected" — refundedAmount is
+// the snapshot taken at refund time for exactly this reason.
+function getCollectedAmount(bill) {
+  return bill.status === "refunded" ? Number(bill.refundedAmount) : Number(bill.netAmount) - Number(bill.balance);
+}
+
+function statusLabel(status) {
+  if (status === "fully_paid") return "Fully Paid";
+  if (status === "refunded") return "Refunded";
+  return "Pending";
+}
 
 // Cached from the last successful loadAnalytics()/loadClientDetail() calls,
 // so the Download PDF buttons export exactly what's currently on screen
@@ -22,7 +39,6 @@ let lastDayWise = [];
 let lastOperatorWise = [];
 let lastLocationWise = [];
 let lastCategoryWise = [];
-let lastCompanyOutstanding = [];
 let lastClientOutstanding = [];
 let lastClientDaily = [];
 let lastClientLedger = [];
@@ -43,6 +59,7 @@ async function init() {
 
   document.getElementById("logout-btn").addEventListener("click", logout);
   setupChangePasswordModal();
+  setupRefundModal();
   setupAnalyticsDownloads();
   setupTabs();
   setupComboboxes();
@@ -299,6 +316,40 @@ async function loadCompanies() {
   newCategoryCompanyCombobox.updateItems(companies);
 }
 
+function openRefundModal(bill) {
+  pendingRefundBillId = bill.id;
+  const collected = getCollectedAmount(bill);
+  document.getElementById("refund-modal-details").textContent =
+    `Bill ${bill.billNumber} — ${bill.client.name}. Amount paid so far: ${formatCurrency(collected)}. Confirm this amount has been refunded to the client?`;
+  const msg = document.getElementById("refund-modal-msg");
+  msg.textContent = "";
+  msg.className = "msg";
+  document.getElementById("refund-modal").style.display = "flex";
+}
+
+function closeRefundModal() {
+  document.getElementById("refund-modal").style.display = "none";
+  pendingRefundBillId = null;
+}
+
+function setupRefundModal() {
+  document.getElementById("refund-modal-cancel").addEventListener("click", closeRefundModal);
+  document.getElementById("refund-modal").addEventListener("click", (e) => {
+    if (e.target.id === "refund-modal") closeRefundModal();
+  });
+  document.getElementById("refund-modal-confirm").addEventListener("click", async () => {
+    if (!pendingRefundBillId) return;
+    const msg = document.getElementById("refund-modal-msg");
+    try {
+      await api(`/bills/${pendingRefundBillId}/refund`, { method: "PATCH" });
+      closeRefundModal();
+      await loadBills();
+    } catch (err) {
+      showMessage(msg, err.message, true);
+    }
+  });
+}
+
 async function loadBills() {
   const data = await api("/bills");
   bills = data.bills; // full list — needed so Record Payment can top up ANY pending bill, not just your own
@@ -306,12 +357,34 @@ async function loadBills() {
   // The visible table only shows bills YOU created — see the note in the
   // card for why: it's your personal work log, not the shop-wide total
   // (that's what the Analytics tab is for).
-  const myBills = bills.filter((b) => b.createdBy && b.createdBy.id === currentUserId);
+  myBillsCache = bills.filter((b) => b.createdBy && b.createdBy.id === currentUserId);
+
+  // Refunded bills stay VISIBLE as individual rows (for your own record),
+  // but are excluded from the Total row — matching how they're excluded
+  // from every Analytics aggregate too.
+  const activeBills = myBillsCache.filter((b) => b.status !== "refunded");
+  const refundedCount = myBillsCache.length - activeBills.length;
+
+  myBillsTotals = activeBills.reduce(
+    (acc, b) => {
+      acc.billed += Number(b.originalAmount);
+      acc.net += Number(b.netAmount);
+      acc.collected += getCollectedAmount(b);
+      acc.discount += Number(b.discountAmount);
+      acc.outstanding += Number(b.balance);
+      return acc;
+    },
+    { billed: 0, net: 0, collected: 0, discount: 0, outstanding: 0 }
+  );
 
   const tbody = document.querySelector("#bills-table tbody");
-  tbody.innerHTML = myBills
+  const rowsHtml = myBillsCache
     .map((b) => {
-      const collected = Number(b.netAmount) - Number(b.balance);
+      const collected = getCollectedAmount(b);
+      const canRefund = b.status !== "refunded" && collected > 0;
+      const actionsCell = canRefund
+        ? `<button class="danger refund-btn" data-id="${b.id}">Refund</button>`
+        : "—";
       return `
       <tr>
         <td>${b.billNumber}</td>
@@ -323,26 +396,38 @@ async function loadBills() {
         <td>${formatCurrency(collected)}</td>
         <td>${formatCurrency(b.discountAmount)}</td>
         <td>${formatCurrency(b.balance)}</td>
-        <td><span class="badge ${b.status}">${b.status === "fully_paid" ? "Fully Paid" : "Pending"}</span></td>
+        <td><span class="badge ${b.status}">${statusLabel(b.status)}</span></td>
         <td>${formatDateTime(b.createdAt)}</td>
+        <td>${actionsCell}</td>
       </tr>`;
     })
     .join("");
 
-  const totals = myBills.reduce(
-    (acc, b) => {
-      acc.billed += Number(b.originalAmount);
-      acc.collected += Number(b.netAmount) - Number(b.balance);
-      acc.discount += Number(b.discountAmount);
-      acc.outstanding += Number(b.balance);
-      return acc;
-    },
-    { billed: 0, collected: 0, discount: 0, outstanding: 0 }
-  );
+  const totalRowHtml = activeBills.length
+    ? `
+      <tr class="total-row">
+        <td colspan="5">Total (${activeBills.length} bill${activeBills.length === 1 ? "" : "s"}${refundedCount ? `, ${refundedCount} refunded excluded` : ""})</td>
+        <td>${formatCurrency(myBillsTotals.net)}</td>
+        <td>${formatCurrency(myBillsTotals.collected)}</td>
+        <td>${formatCurrency(myBillsTotals.discount)}</td>
+        <td>${formatCurrency(myBillsTotals.outstanding)}</td>
+        <td colspan="3"></td>
+      </tr>`
+    : "";
+
+  tbody.innerHTML = rowsHtml + totalRowHtml;
+
+  tbody.querySelectorAll(".refund-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const bill = myBillsCache.find((b) => b.id === btn.dataset.id);
+      if (bill) openRefundModal(bill);
+    });
+  });
+
   document.getElementById("my-bills-summary").textContent =
-    `Total bills: ${myBills.length} — Billed: ${formatCurrency(totals.billed)}, ` +
-    `Collected: ${formatCurrency(totals.collected)}, Discount: ${formatCurrency(totals.discount)}, ` +
-    `Outstanding: ${formatCurrency(totals.outstanding)}`;
+    `Total bills: ${myBillsCache.length}${refundedCount ? ` (${refundedCount} refunded)` : ""} — Billed: ${formatCurrency(myBillsTotals.billed)}, ` +
+    `Collected: ${formatCurrency(myBillsTotals.collected)}, Discount: ${formatCurrency(myBillsTotals.discount)}, ` +
+    `Outstanding: ${formatCurrency(myBillsTotals.outstanding)}`;
 
   const pendingBills = bills.filter((b) => b.status === "pending");
   billCombobox.updateItems(pendingBills);
@@ -474,17 +559,62 @@ document.getElementById("settle-submit-btn").addEventListener("click", async () 
   }
 });
 
+document.getElementById("download-my-bills-pdf").addEventListener("click", () => {
+  const activeBills = myBillsCache.filter((b) => b.status !== "refunded");
+  const refundedCount = myBillsCache.length - activeBills.length;
+
+  const rows = myBillsCache.map((b) => {
+    const collected = getCollectedAmount(b);
+    return [
+      b.billNumber,
+      b.client.name,
+      b.category ? b.category.name : "—",
+      b.company ? b.company.name : "—",
+      b.location ? b.location.name : "—",
+      formatCurrency(b.netAmount),
+      formatCurrency(collected),
+      formatCurrency(b.discountAmount),
+      formatCurrency(b.balance),
+      statusLabel(b.status),
+      formatDateTime(b.createdAt),
+    ];
+  });
+
+  if (activeBills.length) {
+    rows.push([
+      `Total (${activeBills.length} bills${refundedCount ? `, ${refundedCount} refunded excluded` : ""})`,
+      "", "", "", "",
+      formatCurrency(myBillsTotals.net),
+      formatCurrency(myBillsTotals.collected),
+      formatCurrency(myBillsTotals.discount),
+      formatCurrency(myBillsTotals.outstanding),
+      "", "",
+    ]);
+  }
+
+  downloadPdfReport({
+    title: "My Bills",
+    subtitle: `Generated ${formatDateTime(new Date())} — bills you personally created`,
+    sections: [
+      {
+        headers: ["Bill #", "Client", "Category", "Company", "Location", "Net Amount", "Collected", "Discount", "Balance", "Status", "Created"],
+        rows,
+      },
+    ],
+    filename: `my-bills_${getTodayIstDateString()}.pdf`,
+  });
+});
+
 // ---------- Analytics ----------
 
 async function loadAnalytics() {
   const qs = buildDateParams();
 
-  const [dayWise, operatorWise, locationWise, categoryWise, companyOutstanding, clientOutstanding] = await Promise.all([
+  const [dayWise, operatorWise, locationWise, categoryWise, clientOutstanding] = await Promise.all([
     api(`/analytics/day-wise${qs}`),
     api(`/analytics/operator-wise${qs}`),
     api(`/analytics/location-wise${qs}`),
     api(`/analytics/category-wise${qs}`),
-    api("/analytics/company-outstanding"),
     api("/analytics/client-outstanding"),
   ]);
 
@@ -492,7 +622,6 @@ async function loadAnalytics() {
   lastOperatorWise = operatorWise.operatorWise;
   lastLocationWise = locationWise.locationWise;
   lastCategoryWise = categoryWise.categoryWise;
-  lastCompanyOutstanding = companyOutstanding.companyOutstanding;
   lastClientOutstanding = clientOutstanding.clientOutstanding;
 
   document.querySelector("#day-wise-table tbody").innerHTML = dayWise.dayWise
@@ -505,6 +634,7 @@ async function loadAnalytics() {
         <td>${r.cash_count} (${formatCurrency(r.cash_total)})</td>
         <td>${r.credit_card_count} (${formatCurrency(r.credit_card_total)})</td>
         <td>${r.upi_count} (${formatCurrency(r.upi_total)})</td>
+        <td>${r.refunded_bill_count ? `${r.refunded_bill_count} (${formatCurrency(r.refunded_amount_total)})` : "—"}</td>
       </tr>`
     )
     .join("");
@@ -517,6 +647,7 @@ async function loadAnalytics() {
         <td>${formatCurrency(r.totalBilled || 0)}</td>
         <td>${formatCurrency(r.totalDiscount || 0)}</td>
         <td>${formatCurrency(r.totalCollected || 0)}</td>
+        <td>${formatCurrency(r.totalPending || 0)}</td>
         <td>${r.billsCreated || 0}</td>
         <td>${r.transactionCount || 0}</td>
       </tr>`
@@ -544,14 +675,9 @@ async function loadAnalytics() {
         <td>${r.category_type || "—"}</td>
         <td>${r.bill_count || 0}</td>
         <td>${formatCurrency(r.total_billed || 0)}</td>
+        <td>${formatCurrency(r.total_discount || 0)}</td>
+        <td>${formatCurrency(r.total_outstanding || 0)}</td>
       </tr>`
-    )
-    .join("");
-
-  document.querySelector("#company-outstanding-table tbody").innerHTML = companyOutstanding.companyOutstanding
-    .map(
-      (r) =>
-        `<tr><td>${r.company_name}</td><td>${formatCurrency(r.outstanding_balance)}</td><td>${r.pending_bill_count}</td></tr>`
     )
     .join("");
 
@@ -597,7 +723,7 @@ async function loadClientDetail() {
         <td>${b.billNumber}</td>
         <td>${formatCurrency(b.netAmount)}</td>
         <td>${formatCurrency(b.balance)}</td>
-        <td><span class="badge ${b.status}">${b.status === "fully_paid" ? "Fully Paid" : "Pending"}</span></td>
+        <td><span class="badge ${b.status}">${statusLabel(b.status)}</span></td>
         <td>${payments}</td>
       </tr>`;
     })
@@ -770,7 +896,7 @@ function setupAnalyticsDownloads() {
       subtitle: rangeSubtitle(),
       sections: [
         {
-          headers: ["Day", "Total Collected", "Transactions", "Cash", "Credit Card", "UPI"],
+          headers: ["Day", "Total Collected", "Transactions", "Cash", "Credit Card", "UPI", "Bills Refunded"],
           rows: lastDayWise.map((r) => [
             formatDate(r.day),
             formatCurrency(r.total_collected),
@@ -778,6 +904,7 @@ function setupAnalyticsDownloads() {
             `${r.cash_count} (${formatCurrency(r.cash_total)})`,
             `${r.credit_card_count} (${formatCurrency(r.credit_card_total)})`,
             `${r.upi_count} (${formatCurrency(r.upi_total)})`,
+            r.refunded_bill_count ? `${r.refunded_bill_count} (${formatCurrency(r.refunded_amount_total)})` : "—",
           ]),
         },
       ],
@@ -791,12 +918,13 @@ function setupAnalyticsDownloads() {
       subtitle: rangeSubtitle(),
       sections: [
         {
-          headers: ["Operator", "Total Billed", "Discount Given", "Amount Collected", "Bills Created", "Payments Taken"],
+          headers: ["Operator", "Total Billed", "Discount Given", "Amount Collected", "Outstanding Balance", "Bills Created", "Payments Taken"],
           rows: lastOperatorWise.map((r) => [
             r.operatorName,
             formatCurrency(r.totalBilled || 0),
             formatCurrency(r.totalDiscount || 0),
             formatCurrency(r.totalCollected || 0),
+            formatCurrency(r.totalPending || 0),
             r.billsCreated || 0,
             r.transactionCount || 0,
           ]),
@@ -832,34 +960,18 @@ function setupAnalyticsDownloads() {
       subtitle: rangeSubtitle(),
       sections: [
         {
-          headers: ["Category", "Behavior", "Bills", "Total Billed"],
+          headers: ["Category", "Behavior", "Bills", "Total Billed", "Discount Given", "Outstanding Balance"],
           rows: lastCategoryWise.map((r) => [
             r.category_name,
             r.category_type || "—",
             r.bill_count || 0,
             formatCurrency(r.total_billed || 0),
+            formatCurrency(r.total_discount || 0),
+            formatCurrency(r.total_outstanding || 0),
           ]),
         },
       ],
       filename: `category-wise-summary_${todayStr()}.pdf`,
-    });
-  });
-
-  document.getElementById("download-company-outstanding-pdf").addEventListener("click", () => {
-    downloadPdfReport({
-      title: "Company Outstanding Balances",
-      subtitle: snapshotSubtitle(),
-      sections: [
-        {
-          headers: ["Company", "Outstanding Balance", "Pending Bills"],
-          rows: lastCompanyOutstanding.map((r) => [
-            r.company_name,
-            formatCurrency(r.outstanding_balance),
-            r.pending_bill_count,
-          ]),
-        },
-      ],
-      filename: `company-outstanding_${todayStr()}.pdf`,
     });
   });
 
@@ -902,12 +1014,106 @@ function setupAnalyticsDownloads() {
             b.billNumber,
             formatCurrency(b.netAmount),
             formatCurrency(b.balance),
-            b.status === "fully_paid" ? "Fully Paid" : "Pending",
+            statusLabel(b.status),
             b.transactions.map((t) => `${formatCurrency(t.amountCollected)}${Number(t.discountAmount) > 0 ? ` + ${formatCurrency(t.discountAmount)} discount` : ""} (${t.mode}, ${t.operator.name})`).join("; ") || "—",
           ]),
         },
       ],
       filename: `client-detail_${lastLedgerClientName.replace(/\s+/g, "-").toLowerCase()}_${todayStr()}.pdf`,
+    });
+  });
+
+  document.getElementById("download-all-pdf").addEventListener("click", () => {
+    const sections = [
+      {
+        heading: "Day-wise Summary",
+        headers: ["Day", "Total Collected", "Transactions", "Cash", "Credit Card", "UPI", "Bills Refunded"],
+        rows: lastDayWise.map((r) => [
+          formatDate(r.day),
+          formatCurrency(r.total_collected),
+          r.transaction_count,
+          `${r.cash_count} (${formatCurrency(r.cash_total)})`,
+          `${r.credit_card_count} (${formatCurrency(r.credit_card_total)})`,
+          `${r.upi_count} (${formatCurrency(r.upi_total)})`,
+          r.refunded_bill_count ? `${r.refunded_bill_count} (${formatCurrency(r.refunded_amount_total)})` : "—",
+        ]),
+      },
+      {
+        heading: "Operator-wise Summary",
+        headers: ["Operator", "Total Billed", "Discount Given", "Amount Collected", "Outstanding Balance", "Bills Created", "Payments Taken"],
+        rows: lastOperatorWise.map((r) => [
+          r.operatorName,
+          formatCurrency(r.totalBilled || 0),
+          formatCurrency(r.totalDiscount || 0),
+          formatCurrency(r.totalCollected || 0),
+          formatCurrency(r.totalPending || 0),
+          r.billsCreated || 0,
+          r.transactionCount || 0,
+        ]),
+      },
+      {
+        heading: "Location-wise Summary",
+        headers: ["Location", "Total Billed", "Discount Given", "Pending Amount", "Bills Created"],
+        rows: lastLocationWise.map((r) => [
+          r.location_name,
+          formatCurrency(r.total_billed || 0),
+          formatCurrency(r.total_discount || 0),
+          formatCurrency(r.total_pending || 0),
+          r.bills_created || 0,
+        ]),
+      },
+      {
+        heading: "Category-wise Summary",
+        headers: ["Category", "Behavior", "Bills", "Total Billed", "Discount Given", "Outstanding Balance"],
+        rows: lastCategoryWise.map((r) => [
+          r.category_name,
+          r.category_type || "—",
+          r.bill_count || 0,
+          formatCurrency(r.total_billed || 0),
+          formatCurrency(r.total_discount || 0),
+          formatCurrency(r.total_outstanding || 0),
+        ]),
+      },
+      {
+        heading: "Client Outstanding Balances (current snapshot, not date-filtered)",
+        headers: ["Client", "Outstanding Balance", "Pending Bills"],
+        rows: lastClientOutstanding.map((r) => [
+          r.client_name,
+          formatCurrency(r.outstanding_balance),
+          r.pending_bill_count,
+        ]),
+      },
+    ];
+
+    // Per-Client Detail is only added if a client happens to be selected
+    // right now — it's supplementary, not part of the core shop-wide
+    // report, so its absence isn't an error.
+    if (currentLedgerClientId && lastLedgerClientName) {
+      sections.push(
+        {
+          heading: `Per-Client Detail — ${lastLedgerClientName} — Per-day summary`,
+          headers: ["Day", "Total Collected", "Transactions"],
+          rows: lastClientDaily.map((r) => [formatDate(r.day), formatCurrency(r.total_collected), r.transaction_count]),
+        },
+        {
+          heading: `Per-Client Detail — ${lastLedgerClientName} — Bill ledger (full history)`,
+          headers: ["Bill #", "Net Amount", "Balance", "Status", "Payments"],
+          rows: lastClientLedger.map((b) => [
+            b.billNumber,
+            formatCurrency(b.netAmount),
+            formatCurrency(b.balance),
+            statusLabel(b.status),
+            b.transactions.map((t) => `${formatCurrency(t.amountCollected)}${Number(t.discountAmount) > 0 ? ` + ${formatCurrency(t.discountAmount)} discount` : ""} (${t.mode}, ${t.operator.name})`).join("; ") || "—",
+          ]),
+        }
+      );
+    }
+
+    downloadPdfReport({
+      title: "Full Analytics Report",
+      subtitle: `Date-scoped sections: ${rangeSubtitle()} · Outstanding-balance sections are current snapshots, not date-filtered`,
+      sections,
+      filename: `full-analytics-report_${todayStr()}.pdf`,
     });
   });
 }

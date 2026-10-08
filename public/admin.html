@@ -148,14 +148,14 @@
       </div>
 
       <div class="card">
-        <h2>My Bills</h2>
+        <div class="card-header-row"><h2>My Bills</h2><button class="secondary" id="download-my-bills-pdf">Download PDF</button></div>
         <p style="color:var(--muted); font-size:13px; margin-top:-8px;">
           Only bills you personally created — not the full shop total. Use Record Payment above to top up any pending bill regardless of who created it.
         </p>
         <p id="my-bills-summary" style="color:var(--muted); font-size:13px;"></p>
         <table id="bills-table">
           <thead>
-            <tr><th>Bill #</th><th>Client</th><th>Category</th><th>Company</th><th>Location</th><th>Net Amount</th><th>Collected</th><th>Discount</th><th>Balance</th><th>Status</th><th>Created</th></tr>
+            <tr><th>Bill #</th><th>Client</th><th>Category</th><th>Company</th><th>Location</th><th>Net Amount</th><th>Collected</th><th>Discount</th><th>Balance</th><th>Status</th><th>Created</th><th>Actions</th></tr>
           </thead>
           <tbody></tbody>
         </table>
@@ -178,7 +178,8 @@
           <button type="submit">Apply</button>
           <button type="button" class="secondary" id="clear-date-range">Clear (all time)</button>
         </form>
-        <p id="range-label" style="color:var(--muted); font-size:13px; margin-bottom:0;">Showing: today</p>
+        <p id="range-label" style="color:var(--muted); font-size:13px;">Showing: today</p>
+        <button class="secondary" id="download-all-pdf">Download All (PDF)</button>
       </div>
 
       <div class="card">
@@ -192,6 +193,7 @@
               <th>Cash</th>
               <th>Credit Card</th>
               <th>UPI</th>
+              <th>Bills Refunded</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -207,6 +209,7 @@
               <th>Total Billed</th>
               <th>Discount Given</th>
               <th>Amount Collected</th>
+              <th>Outstanding Balance</th>
               <th>Bills Created</th>
               <th>Payments Taken</th>
             </tr>
@@ -246,19 +249,10 @@
               <th>Behavior</th>
               <th>Bills</th>
               <th>Total Billed</th>
+              <th>Discount Given</th>
+              <th>Outstanding Balance</th>
             </tr>
           </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-
-      <div class="card">
-        <div class="card-header-row"><h2>Company Outstanding Balances</h2><button class="secondary" id="download-company-outstanding-pdf">Download PDF</button></div>
-        <p style="color:var(--muted); font-size:13px; margin-top:-8px;">
-          Current balance owed by each company across all its credit bills — not scoped to the date range above.
-        </p>
-        <table id="company-outstanding-table">
-          <thead><tr><th>Company</th><th>Outstanding Balance</th><th>Pending Bills</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -388,6 +382,18 @@
     </section>
   </main>
 
+  <!-- Refund confirmation modal -->
+  <div id="refund-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-box">
+      <h2>Confirm Refund</h2>
+      <p id="refund-modal-details"></p>
+      <div class="modal-actions">
+        <button type="button" class="secondary" id="refund-modal-cancel">Cancel</button>
+        <button type="button" class="danger" id="refund-modal-confirm">Confirm Refund</button>
+      </div>
+      <div id="refund-modal-msg" class="msg"></div>
+    </div>
+  </div>
 
   <!-- Change Password modal (shared markup pattern across all role pages) -->
   <div id="change-password-modal" class="modal-overlay" style="display:none;">

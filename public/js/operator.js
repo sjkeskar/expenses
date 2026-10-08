@@ -4,6 +4,8 @@ let categories = [];
 let companies = [];
 let bills = [];
 let currentUserId = null;
+let myBillsCache = [];
+let myBillsTotals = { billed: 0, net: 0, collected: 0, discount: 0, outstanding: 0 };
 let clientCombobox = null;
 let locationCombobox = null;
 let categoryCombobox = null;
@@ -11,6 +13,21 @@ let settleCompanyCombobox = null;
 let billCombobox = null;
 let selectedCategory = null;
 let settleBills = [];
+let pendingRefundBillId = null;
+
+// Once a bill is refunded, balance is force-zeroed by the refund itself
+// (not reached through normal payment), so "netAmount - balance" stops
+// being a valid way to read off "amount collected" — refundedAmount is
+// the snapshot taken at refund time for exactly this reason.
+function getCollectedAmount(bill) {
+  return bill.status === "refunded" ? Number(bill.refundedAmount) : Number(bill.netAmount) - Number(bill.balance);
+}
+
+function statusLabel(status) {
+  if (status === "fully_paid") return "Fully Paid";
+  if (status === "refunded") return "Refunded";
+  return "Pending";
+}
 
 async function init() {
   const user = await guardPage("operator");
@@ -27,6 +44,7 @@ async function init() {
 
   document.getElementById("logout-btn").addEventListener("click", logout);
   setupChangePasswordModal();
+  setupRefundModal();
 
   setupComboboxes();
   document.getElementById("bill-date").value = getTodayIstDateString();
@@ -173,6 +191,40 @@ async function loadCompanies() {
   settleCompanyCombobox.updateItems(companies);
 }
 
+function openRefundModal(bill) {
+  pendingRefundBillId = bill.id;
+  const collected = getCollectedAmount(bill);
+  document.getElementById("refund-modal-details").textContent =
+    `Bill ${bill.billNumber} — ${bill.client.name}. Amount paid so far: ${formatCurrency(collected)}. Confirm this amount has been refunded to the client?`;
+  const msg = document.getElementById("refund-modal-msg");
+  msg.textContent = "";
+  msg.className = "msg";
+  document.getElementById("refund-modal").style.display = "flex";
+}
+
+function closeRefundModal() {
+  document.getElementById("refund-modal").style.display = "none";
+  pendingRefundBillId = null;
+}
+
+function setupRefundModal() {
+  document.getElementById("refund-modal-cancel").addEventListener("click", closeRefundModal);
+  document.getElementById("refund-modal").addEventListener("click", (e) => {
+    if (e.target.id === "refund-modal") closeRefundModal();
+  });
+  document.getElementById("refund-modal-confirm").addEventListener("click", async () => {
+    if (!pendingRefundBillId) return;
+    const msg = document.getElementById("refund-modal-msg");
+    try {
+      await api(`/bills/${pendingRefundBillId}/refund`, { method: "PATCH" });
+      closeRefundModal();
+      await loadBills();
+    } catch (err) {
+      showMessage(msg, err.message, true);
+    }
+  });
+}
+
 async function loadBills() {
   const data = await api("/bills");
   bills = data.bills; // full list — needed so Record Payment can top up ANY pending bill, not just your own
@@ -180,12 +232,34 @@ async function loadBills() {
   // The visible table only shows bills YOU created — see the note in the
   // card for why: it's your personal work log, not the shop-wide total
   // (that's what Analytics is for, on the admin/accountant side).
-  const myBills = bills.filter((b) => b.createdBy && b.createdBy.id === currentUserId);
+  myBillsCache = bills.filter((b) => b.createdBy && b.createdBy.id === currentUserId);
+
+  // Refunded bills stay VISIBLE as individual rows (for your own record),
+  // but are excluded from the Total row — matching how they're excluded
+  // from every Analytics aggregate too.
+  const activeBills = myBillsCache.filter((b) => b.status !== "refunded");
+  const refundedCount = myBillsCache.length - activeBills.length;
+
+  myBillsTotals = activeBills.reduce(
+    (acc, b) => {
+      acc.billed += Number(b.originalAmount);
+      acc.net += Number(b.netAmount);
+      acc.collected += getCollectedAmount(b);
+      acc.discount += Number(b.discountAmount);
+      acc.outstanding += Number(b.balance);
+      return acc;
+    },
+    { billed: 0, net: 0, collected: 0, discount: 0, outstanding: 0 }
+  );
 
   const tbody = document.querySelector("#bills-table tbody");
-  tbody.innerHTML = myBills
+  const rowsHtml = myBillsCache
     .map((b) => {
-      const collected = Number(b.netAmount) - Number(b.balance);
+      const collected = getCollectedAmount(b);
+      const canRefund = b.status !== "refunded" && collected > 0;
+      const actionsCell = canRefund
+        ? `<button class="danger refund-btn" data-id="${b.id}">Refund</button>`
+        : "—";
       return `
       <tr>
         <td>${b.billNumber}</td>
@@ -197,26 +271,38 @@ async function loadBills() {
         <td>${formatCurrency(collected)}</td>
         <td>${formatCurrency(b.discountAmount)}</td>
         <td>${formatCurrency(b.balance)}</td>
-        <td><span class="badge ${b.status}">${b.status === "fully_paid" ? "Fully Paid" : "Pending"}</span></td>
+        <td><span class="badge ${b.status}">${statusLabel(b.status)}</span></td>
         <td>${formatDateTime(b.createdAt)}</td>
+        <td>${actionsCell}</td>
       </tr>`;
     })
     .join("");
 
-  const totals = myBills.reduce(
-    (acc, b) => {
-      acc.billed += Number(b.originalAmount);
-      acc.collected += Number(b.netAmount) - Number(b.balance);
-      acc.discount += Number(b.discountAmount);
-      acc.outstanding += Number(b.balance);
-      return acc;
-    },
-    { billed: 0, collected: 0, discount: 0, outstanding: 0 }
-  );
+  const totalRowHtml = activeBills.length
+    ? `
+      <tr class="total-row">
+        <td colspan="5">Total (${activeBills.length} bill${activeBills.length === 1 ? "" : "s"}${refundedCount ? `, ${refundedCount} refunded excluded` : ""})</td>
+        <td>${formatCurrency(myBillsTotals.net)}</td>
+        <td>${formatCurrency(myBillsTotals.collected)}</td>
+        <td>${formatCurrency(myBillsTotals.discount)}</td>
+        <td>${formatCurrency(myBillsTotals.outstanding)}</td>
+        <td colspan="3"></td>
+      </tr>`
+    : "";
+
+  tbody.innerHTML = rowsHtml + totalRowHtml;
+
+  tbody.querySelectorAll(".refund-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const bill = myBillsCache.find((b) => b.id === btn.dataset.id);
+      if (bill) openRefundModal(bill);
+    });
+  });
+
   document.getElementById("my-bills-summary").textContent =
-    `Total bills: ${myBills.length} — Billed: ${formatCurrency(totals.billed)}, ` +
-    `Collected: ${formatCurrency(totals.collected)}, Discount: ${formatCurrency(totals.discount)}, ` +
-    `Outstanding: ${formatCurrency(totals.outstanding)}`;
+    `Total bills: ${myBillsCache.length}${refundedCount ? ` (${refundedCount} refunded)` : ""} — Billed: ${formatCurrency(myBillsTotals.billed)}, ` +
+    `Collected: ${formatCurrency(myBillsTotals.collected)}, Discount: ${formatCurrency(myBillsTotals.discount)}, ` +
+    `Outstanding: ${formatCurrency(myBillsTotals.outstanding)}`;
 
   const pendingBills = bills.filter((b) => b.status === "pending");
   billCombobox.updateItems(pendingBills);
@@ -346,6 +432,52 @@ document.getElementById("settle-submit-btn").addEventListener("click", async () 
   } catch (err) {
     showMessage(msg, err.message, true);
   }
+});
+
+document.getElementById("download-my-bills-pdf").addEventListener("click", () => {
+  const activeBills = myBillsCache.filter((b) => b.status !== "refunded");
+  const refundedCount = myBillsCache.length - activeBills.length;
+
+  const rows = myBillsCache.map((b) => {
+    const collected = getCollectedAmount(b);
+    return [
+      b.billNumber,
+      b.client.name,
+      b.category ? b.category.name : "—",
+      b.company ? b.company.name : "—",
+      b.location ? b.location.name : "—",
+      formatCurrency(b.netAmount),
+      formatCurrency(collected),
+      formatCurrency(b.discountAmount),
+      formatCurrency(b.balance),
+      statusLabel(b.status),
+      formatDateTime(b.createdAt),
+    ];
+  });
+
+  if (activeBills.length) {
+    rows.push([
+      `Total (${activeBills.length} bills${refundedCount ? `, ${refundedCount} refunded excluded` : ""})`,
+      "", "", "", "",
+      formatCurrency(myBillsTotals.net),
+      formatCurrency(myBillsTotals.collected),
+      formatCurrency(myBillsTotals.discount),
+      formatCurrency(myBillsTotals.outstanding),
+      "", "",
+    ]);
+  }
+
+  downloadPdfReport({
+    title: "My Bills",
+    subtitle: `Generated ${formatDateTime(new Date())} — bills you personally created`,
+    sections: [
+      {
+        headers: ["Bill #", "Client", "Category", "Company", "Location", "Net Amount", "Collected", "Discount", "Balance", "Status", "Created"],
+        rows,
+      },
+    ],
+    filename: `my-bills_${getTodayIstDateString()}.pdf`,
+  });
 });
 
 init();

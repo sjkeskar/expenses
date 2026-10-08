@@ -20,6 +20,11 @@ enum Role {
 enum BillStatus {
   pending
   fully_paid
+  // A whole bill is refunded — a terminal state, not a partial payment
+  // reversal. See the refund route in bills.js for why the whole
+  // collected amount (not a per-transaction adjustment) is what gets
+  // reversed.
+  refunded
 }
 
 enum PaymentMode {
@@ -60,6 +65,7 @@ model User {
   createdTransactions  Transaction[] @relation("CreatedByTransactions")
   updatedTransactions  Transaction[] @relation("UpdatedByTransactions")
   createdBills         Bill[]        @relation("BillCreatedBy")
+  refundedBills        Bill[]        @relation("BillRefundedBy")
 
   @@map("users")
 }
@@ -193,6 +199,19 @@ model Bill {
   // category's type is "credit"; always null for "standard" categories.
   companyId String?
   company   Company? @relation(fields: [companyId], references: [id])
+
+  // Set only when status == "refunded". originalAmount/discountAmount/
+  // netAmount are deliberately left untouched by a refund (they still
+  // show what the bill was originally FOR, for audit purposes) — balance
+  // is zeroed instead (nothing further owed), and refundedAmount snapshots
+  // exactly how much had been collected at the moment of refund, since
+  // after balance is zeroed the usual "netAmount - balance" derivation
+  // can no longer be used to reconstruct that figure. See the refund
+  // route in bills.js.
+  refundedAmount Decimal?  @db.Decimal(12, 2)
+  refundedAt     DateTime? @db.Timestamptz(3)
+  refundedById   String?
+  refundedBy     User?     @relation("BillRefundedBy", fields: [refundedById], references: [id])
 
   transactions Transaction[]
 

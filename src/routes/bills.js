@@ -21,6 +21,7 @@ router.get("/", requireAuth, requireRole("operator", "admin"), async (req, res) 
       category: { select: { id: true, name: true, type: true } },
       company: { select: { id: true, name: true } },
       createdBy: { select: { id: true, name: true } },
+      refundedBy: { select: { id: true, name: true } },
     },
     orderBy: { createdAt: "desc" },
   });
@@ -37,6 +38,7 @@ router.get("/:id", requireAuth, requireRole("operator", "admin"), async (req, re
       category: { select: { id: true, name: true, type: true } },
       company: { select: { id: true, name: true } },
       createdBy: { select: { id: true, name: true } },
+      refundedBy: { select: { id: true, name: true } },
       transactions: {
         where: { isDeleted: false },
         include: { operator: { select: { id: true, name: true } } },
@@ -246,6 +248,59 @@ router.post("/", requireAuth, requireRole("operator", "admin"), async (req, res)
       return res.status(err.status).json({ error: err.message });
     }
     res.status(500).json({ error: "Could not create bill." });
+  }
+});
+
+// PATCH /api/bills/:id/refund — operator + admin.
+// Marks a whole bill as refunded. Refundable at any status as long as
+// some amount has actually been collected (pending or fully_paid) — see
+// the refundedAmount field comment in schema.prisma for why balance is
+// zeroed and refundedAmount snapshots the collected total separately,
+// rather than deriving it later from netAmount - balance.
+router.patch("/:id/refund", requireAuth, requireRole("operator", "admin"), async (req, res) => {
+  const userId = req.session.user.id;
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const bill = await tx.bill.findUnique({ where: { id: req.params.id } });
+      if (!bill) {
+        throw { status: 404, message: "Bill not found." };
+      }
+      if (bill.status === "refunded") {
+        throw { status: 400, message: "This bill has already been refunded." };
+      }
+      const collected = Number(bill.netAmount) - Number(bill.balance);
+      if (collected <= 0) {
+        throw { status: 400, message: "This bill has no collected amount to refund." };
+      }
+
+      const updated = await tx.bill.update({
+        where: { id: bill.id },
+        data: {
+          status: "refunded",
+          balance: 0,
+          refundedAmount: collected,
+          refundedAt: new Date(),
+          refundedById: userId,
+        },
+        include: {
+          client: { select: { id: true, name: true } },
+          location: { select: { id: true, name: true } },
+          category: { select: { id: true, name: true, type: true } },
+          company: { select: { id: true, name: true } },
+          createdBy: { select: { id: true, name: true } },
+          refundedBy: { select: { id: true, name: true } },
+        },
+      });
+
+      return updated;
+    });
+
+    res.json({ bill: result });
+  } catch (err) {
+    if (err && err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Could not refund bill." });
   }
 });
 

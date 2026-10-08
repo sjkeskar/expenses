@@ -40,7 +40,8 @@
           <button type="submit">Apply</button>
           <button type="button" class="secondary" id="clear-date-range">Clear (all time)</button>
         </form>
-        <p id="range-label" style="color:var(--muted); font-size:13px; margin-bottom:0;">Showing: today</p>
+        <p id="range-label" style="color:var(--muted); font-size:13px;">Showing: today</p>
+        <button class="secondary" id="download-all-pdf">Download All (PDF)</button>
       </div>
 
       <div class="card">
@@ -54,6 +55,7 @@
               <th>Cash</th>
               <th>Credit Card</th>
               <th>UPI</th>
+              <th>Bills Refunded</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -69,6 +71,7 @@
               <th>Total Billed</th>
               <th>Discount Given</th>
               <th>Amount Collected</th>
+              <th>Outstanding Balance</th>
               <th>Bills Created</th>
               <th>Payments Taken</th>
             </tr>
@@ -108,19 +111,10 @@
               <th>Behavior</th>
               <th>Bills</th>
               <th>Total Billed</th>
+              <th>Discount Given</th>
+              <th>Outstanding Balance</th>
             </tr>
           </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-
-      <div class="card">
-        <div class="card-header-row"><h2>Company Outstanding Balances</h2><button class="secondary" id="download-company-outstanding-pdf">Download PDF</button></div>
-        <p style="color:var(--muted); font-size:13px; margin-top:-8px;">
-          Current balance owed by each company across all its credit bills — not scoped to the date range above.
-        </p>
-        <table id="company-outstanding-table">
-          <thead><tr><th>Company</th><th>Outstanding Balance</th><th>Pending Bills</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>

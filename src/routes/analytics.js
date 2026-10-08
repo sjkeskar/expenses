@@ -24,34 +24,105 @@ router.use(requireAuth, requireRole("admin", "accountant"));
 // considered "local."
 router.get("/day-wise", async (req, res) => {
   const { from, to } = parseDateRange(req.query);
-  const rows = await prisma.$queryRaw`
+
+  // Refunded bills are excluded from every collection figure below (see
+  // the JOIN to bills + status filter) — a refund reverses the money, so
+  // it shouldn't still count as "collected" for the day it happened on.
+  // Separately, we surface HOW MANY bills were refunded that day (and
+  // how much), bucketed by refundedAt — that's a distinct metric from
+  // collections, not a subtraction from them, so it comes from its own
+  // query against bills rather than transactions.
+  const collections = await prisma.$queryRaw`
     SELECT
-      DATE("createdAt" AT TIME ZONE 'Asia/Kolkata') AS day,
-      SUM("amountCollected")::float AS total_collected,
+      DATE(t."createdAt" AT TIME ZONE 'Asia/Kolkata') AS day,
+      SUM(t."amountCollected")::float AS total_collected,
       COUNT(*)::int AS transaction_count,
-      COUNT(*) FILTER (WHERE "mode" = 'cash')::int AS cash_count,
-      COALESCE(SUM("amountCollected") FILTER (WHERE "mode" = 'cash'), 0)::float AS cash_total,
-      COUNT(*) FILTER (WHERE "mode" = 'credit_card')::int AS credit_card_count,
-      COALESCE(SUM("amountCollected") FILTER (WHERE "mode" = 'credit_card'), 0)::float AS credit_card_total,
-      COUNT(*) FILTER (WHERE "mode" = 'upi')::int AS upi_count,
-      COALESCE(SUM("amountCollected") FILTER (WHERE "mode" = 'upi'), 0)::float AS upi_total
-    FROM "transactions"
-    WHERE "isDeleted" = false AND "createdAt" >= ${from} AND "createdAt" < ${to}
-    GROUP BY DATE("createdAt" AT TIME ZONE 'Asia/Kolkata')
+      COUNT(*) FILTER (WHERE t."mode" = 'cash')::int AS cash_count,
+      COALESCE(SUM(t."amountCollected") FILTER (WHERE t."mode" = 'cash'), 0)::float AS cash_total,
+      COUNT(*) FILTER (WHERE t."mode" = 'credit_card')::int AS credit_card_count,
+      COALESCE(SUM(t."amountCollected") FILTER (WHERE t."mode" = 'credit_card'), 0)::float AS credit_card_total,
+      COUNT(*) FILTER (WHERE t."mode" = 'upi')::int AS upi_count,
+      COALESCE(SUM(t."amountCollected") FILTER (WHERE t."mode" = 'upi'), 0)::float AS upi_total
+    FROM "transactions" t
+    JOIN "bills" b ON b."id" = t."billId"
+    WHERE t."isDeleted" = false AND b."status" != 'refunded'
+      AND t."createdAt" >= ${from} AND t."createdAt" < ${to}
+    GROUP BY DATE(t."createdAt" AT TIME ZONE 'Asia/Kolkata')
     ORDER BY day DESC;
   `;
-  res.json({ dayWise: rows });
+
+  const refunds = await prisma.$queryRaw`
+    SELECT
+      DATE("refundedAt" AT TIME ZONE 'Asia/Kolkata') AS day,
+      COUNT(*)::int AS refunded_bill_count,
+      SUM("refundedAmount")::float AS refunded_amount_total
+    FROM "bills"
+    WHERE "status" = 'refunded' AND "refundedAt" >= ${from} AND "refundedAt" < ${to}
+    GROUP BY DATE("refundedAt" AT TIME ZONE 'Asia/Kolkata');
+  `;
+
+  const dayKey = (d) => new Date(d).toISOString().slice(0, 10);
+  const merged = new Map();
+
+  for (const row of collections) {
+    merged.set(dayKey(row.day), {
+      day: row.day,
+      total_collected: row.total_collected,
+      transaction_count: row.transaction_count,
+      cash_count: row.cash_count,
+      cash_total: row.cash_total,
+      credit_card_count: row.credit_card_count,
+      credit_card_total: row.credit_card_total,
+      upi_count: row.upi_count,
+      upi_total: row.upi_total,
+      refunded_bill_count: 0,
+      refunded_amount_total: 0,
+    });
+  }
+
+  for (const row of refunds) {
+    const key = dayKey(row.day);
+    const existing = merged.get(key);
+    if (existing) {
+      existing.refunded_bill_count = row.refunded_bill_count;
+      existing.refunded_amount_total = row.refunded_amount_total;
+    } else {
+      merged.set(key, {
+        day: row.day,
+        total_collected: 0,
+        transaction_count: 0,
+        cash_count: 0,
+        cash_total: 0,
+        credit_card_count: 0,
+        credit_card_total: 0,
+        upi_count: 0,
+        upi_total: 0,
+        refunded_bill_count: row.refunded_bill_count,
+        refunded_amount_total: row.refunded_amount_total,
+      });
+    }
+  }
+
+  const dayWise = Array.from(merged.values()).sort((a, b) => new Date(b.day) - new Date(a.day));
+
+  res.json({ dayWise });
 });
 
 // GET /api/analytics/operator-wise?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
-// Per operator: total billed, discount given, amount collected — three
-// separate figures rather than one blended "total collected".
+// Per operator: total billed, discount given, amount collected, and
+// pending (outstanding) amount — separate figures rather than one
+// blended "total collected".
 //
-// Billed/discount come from bills.createdById (who raised the bill);
-// collected comes from transactions.operatorId (who took the payment).
-// These are two different groupings merged into one row per operator,
-// because a bill and its later payments aren't always handled by the
-// same person.
+// Billed/discount/pending come from bills.createdById (who raised the
+// bill); collected comes from transactions.operatorId (who took the
+// payment). These are two different groupings merged into one row per
+// operator, because a bill and its later payments aren't always handled
+// by the same person.
+//
+// Like Location-wise, "pending" is each bill's CURRENT balance, not a
+// snapshot from when the range ended — a bill raised in range that's
+// since been paid off shows 0 pending even though it still counts
+// toward that range's total billed/discount.
 router.get("/operator-wise", async (req, res) => {
   const { from, to } = parseDateRange(req.query);
 
@@ -63,7 +134,9 @@ router.get("/operator-wise", async (req, res) => {
       COUNT(t.*)::int AS transaction_count
     FROM "transactions" t
     JOIN "users" u ON u."id" = t."operatorId"
-    WHERE t."isDeleted" = false AND t."createdAt" >= ${from} AND t."createdAt" < ${to}
+    JOIN "bills" b ON b."id" = t."billId"
+    WHERE t."isDeleted" = false AND b."status" != 'refunded'
+      AND t."createdAt" >= ${from} AND t."createdAt" < ${to}
     GROUP BY u."id", u."name";
   `;
 
@@ -73,10 +146,11 @@ router.get("/operator-wise", async (req, res) => {
       COALESCE(u."name", 'Unattributed (legacy bills)') AS operator_name,
       SUM(b."originalAmount")::float AS total_billed,
       SUM(b."discountAmount")::float AS total_discount,
+      SUM(b."balance")::float AS total_pending,
       COUNT(b.*)::int AS bills_created
     FROM "bills" b
     LEFT JOIN "users" u ON u."id" = b."createdById"
-    WHERE b."createdAt" >= ${from} AND b."createdAt" < ${to}
+    WHERE b."status" != 'refunded' AND b."createdAt" >= ${from} AND b."createdAt" < ${to}
     GROUP BY u."id", u."name";
   `;
 
@@ -91,6 +165,7 @@ router.get("/operator-wise", async (req, res) => {
       transactionCount: row.transaction_count,
       totalBilled: 0,
       totalDiscount: 0,
+      totalPending: 0,
       billsCreated: 0,
     });
   }
@@ -105,6 +180,7 @@ router.get("/operator-wise", async (req, res) => {
     };
     existing.totalBilled = row.total_billed;
     existing.totalDiscount = row.total_discount;
+    existing.totalPending = row.total_pending;
     existing.billsCreated = row.bills_created;
     existing.operatorName = existing.operatorName || row.operator_name;
     merged.set(key, existing);
@@ -139,7 +215,7 @@ router.get("/location-wise", async (req, res) => {
       COUNT(b.*)::int AS bills_created
     FROM "bills" b
     LEFT JOIN "locations" loc ON loc."id" = b."locationId"
-    WHERE b."createdAt" >= ${from} AND b."createdAt" < ${to}
+    WHERE b."status" != 'refunded' AND b."createdAt" >= ${from} AND b."createdAt" < ${to}
     GROUP BY loc."id", loc."name"
     ORDER BY total_billed DESC;
   `;
@@ -148,13 +224,18 @@ router.get("/location-wise", async (req, res) => {
 
 // GET /api/analytics/category-wise?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
 // Bill counts per category (walk-in vs credit, or whatever categories
-// admin has set up) for bills CREATED within the selected date range.
+// admin has set up) for bills CREATED within the selected date range,
+// plus total billed, discount given, and outstanding balance — same
+// pattern as Location-wise below.
 //
 // This counts BILLS, not clients — category is chosen per bill (confirmed
 // decision), so the same client could have bills under different
 // categories. "How many walk-in vs credit bills" is the well-defined
 // question here; "how many walk-in vs credit clients" isn't, since a
 // client isn't fixed to one category.
+//
+// Like Location-wise/Operator-wise, "outstanding balance" is each bill's
+// CURRENT balance, not a snapshot from when the range ended.
 router.get("/category-wise", async (req, res) => {
   const { from, to } = parseDateRange(req.query);
   const rows = await prisma.$queryRaw`
@@ -163,35 +244,16 @@ router.get("/category-wise", async (req, res) => {
       COALESCE(cat."name", 'Unspecified (legacy bills)') AS category_name,
       cat."type" AS category_type,
       COUNT(b.*)::int AS bill_count,
-      SUM(b."originalAmount")::float AS total_billed
+      SUM(b."originalAmount")::float AS total_billed,
+      SUM(b."discountAmount")::float AS total_discount,
+      SUM(b."balance")::float AS total_outstanding
     FROM "bills" b
     LEFT JOIN "categories" cat ON cat."id" = b."categoryId"
-    WHERE b."createdAt" >= ${from} AND b."createdAt" < ${to}
+    WHERE b."status" != 'refunded' AND b."createdAt" >= ${from} AND b."createdAt" < ${to}
     GROUP BY cat."id", cat."name", cat."type"
     ORDER BY bill_count DESC;
   `;
   res.json({ categoryWise: rows });
-});
-
-// GET /api/analytics/company-outstanding
-// Outstanding (unpaid) balance per company — the "balance per
-// credit-client" view. Like client-outstanding, this is a current-state
-// snapshot across ALL of a company's bills regardless of when they were
-// created, not scoped to the date range picker.
-router.get("/company-outstanding", async (req, res) => {
-  const rows = await prisma.$queryRaw`
-    SELECT
-      co."id" AS company_id,
-      co."name" AS company_name,
-      SUM(b."balance")::float AS outstanding_balance,
-      COUNT(b.*) FILTER (WHERE b."status" = 'pending')::int AS pending_bill_count
-    FROM "companies" co
-    JOIN "bills" b ON b."companyId" = co."id"
-    GROUP BY co."id", co."name"
-    HAVING SUM(b."balance") > 0
-    ORDER BY outstanding_balance DESC;
-  `;
-  res.json({ companyOutstanding: rows });
 });
 
 // GET /api/analytics/client-outstanding
@@ -206,6 +268,7 @@ router.get("/client-outstanding", async (req, res) => {
       COUNT(b.*) FILTER (WHERE b."status" = 'pending')::int AS pending_bill_count
     FROM "clients" c
     JOIN "bills" b ON b."clientId" = c."id"
+    WHERE b."status" != 'refunded'
     GROUP BY c."id", c."name"
     HAVING SUM(b."balance") > 0
     ORDER BY outstanding_balance DESC;
@@ -224,7 +287,8 @@ router.get("/client-daily/:clientId", async (req, res) => {
       SUM(t."amountCollected")::float AS total_collected,
       COUNT(t.*)::int AS transaction_count
     FROM "transactions" t
-    WHERE t."isDeleted" = false AND t."clientId" = ${req.params.clientId}
+    JOIN "bills" b ON b."id" = t."billId"
+    WHERE t."isDeleted" = false AND b."status" != 'refunded' AND t."clientId" = ${req.params.clientId}
       AND t."createdAt" >= ${from} AND t."createdAt" < ${to}
     GROUP BY DATE(t."createdAt" AT TIME ZONE 'Asia/Kolkata')
     ORDER BY day DESC;
@@ -236,6 +300,10 @@ router.get("/client-daily/:clientId", async (req, res) => {
 // Full bill-by-bill ledger for one client, each with its transactions.
 // Not date-filtered — this is meant to show the complete picture for the
 // selected client regardless of the day-wise/operator-wise date range.
+// Deliberately NOT filtered by refund status either: unlike the rolled-up
+// aggregates above, this is an audit/drill-down view, so a refunded bill
+// stays visible here with its full original transaction history intact
+// (the frontend badges it as Refunded using bill.status).
 router.get("/client-ledger/:clientId", async (req, res) => {
   const bills = await prisma.bill.findMany({
     where: { clientId: req.params.clientId },

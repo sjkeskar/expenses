@@ -9,11 +9,16 @@ let lastDayWise = [];
 let lastOperatorWise = [];
 let lastLocationWise = [];
 let lastCategoryWise = [];
-let lastCompanyOutstanding = [];
 let lastClientOutstanding = [];
 let lastClientDaily = [];
 let lastClientLedger = [];
 let lastLedgerClientName = "";
+
+function statusLabel(status) {
+  if (status === "fully_paid") return "Fully Paid";
+  if (status === "refunded") return "Refunded";
+  return "Pending";
+}
 
 async function init() {
   const user = await guardPage("accountant");
@@ -111,12 +116,11 @@ function updateRangeLabel() {
 async function loadAnalytics() {
   const qs = buildDateParams();
 
-  const [dayWise, operatorWise, locationWise, categoryWise, companyOutstanding, clientOutstanding] = await Promise.all([
+  const [dayWise, operatorWise, locationWise, categoryWise, clientOutstanding] = await Promise.all([
     api(`/analytics/day-wise${qs}`),
     api(`/analytics/operator-wise${qs}`),
     api(`/analytics/location-wise${qs}`),
     api(`/analytics/category-wise${qs}`),
-    api("/analytics/company-outstanding"),
     api("/analytics/client-outstanding"),
   ]);
 
@@ -124,7 +128,6 @@ async function loadAnalytics() {
   lastOperatorWise = operatorWise.operatorWise;
   lastLocationWise = locationWise.locationWise;
   lastCategoryWise = categoryWise.categoryWise;
-  lastCompanyOutstanding = companyOutstanding.companyOutstanding;
   lastClientOutstanding = clientOutstanding.clientOutstanding;
 
   document.querySelector("#day-wise-table tbody").innerHTML = dayWise.dayWise
@@ -137,6 +140,7 @@ async function loadAnalytics() {
         <td>${r.cash_count} (${formatCurrency(r.cash_total)})</td>
         <td>${r.credit_card_count} (${formatCurrency(r.credit_card_total)})</td>
         <td>${r.upi_count} (${formatCurrency(r.upi_total)})</td>
+        <td>${r.refunded_bill_count ? `${r.refunded_bill_count} (${formatCurrency(r.refunded_amount_total)})` : "—"}</td>
       </tr>`
     )
     .join("");
@@ -149,6 +153,7 @@ async function loadAnalytics() {
         <td>${formatCurrency(r.totalBilled || 0)}</td>
         <td>${formatCurrency(r.totalDiscount || 0)}</td>
         <td>${formatCurrency(r.totalCollected || 0)}</td>
+        <td>${formatCurrency(r.totalPending || 0)}</td>
         <td>${r.billsCreated || 0}</td>
         <td>${r.transactionCount || 0}</td>
       </tr>`
@@ -176,14 +181,9 @@ async function loadAnalytics() {
         <td>${r.category_type || "—"}</td>
         <td>${r.bill_count || 0}</td>
         <td>${formatCurrency(r.total_billed || 0)}</td>
+        <td>${formatCurrency(r.total_discount || 0)}</td>
+        <td>${formatCurrency(r.total_outstanding || 0)}</td>
       </tr>`
-    )
-    .join("");
-
-  document.querySelector("#company-outstanding-table tbody").innerHTML = companyOutstanding.companyOutstanding
-    .map(
-      (r) =>
-        `<tr><td>${r.company_name}</td><td>${formatCurrency(r.outstanding_balance)}</td><td>${r.pending_bill_count}</td></tr>`
     )
     .join("");
 
@@ -229,7 +229,7 @@ async function loadClientDetail() {
         <td>${b.billNumber}</td>
         <td>${formatCurrency(b.netAmount)}</td>
         <td>${formatCurrency(b.balance)}</td>
-        <td><span class="badge ${b.status}">${b.status === "fully_paid" ? "Fully Paid" : "Pending"}</span></td>
+        <td><span class="badge ${b.status}">${statusLabel(b.status)}</span></td>
         <td>${payments}</td>
       </tr>`;
     })
@@ -249,7 +249,7 @@ function setupAnalyticsDownloads() {
       subtitle: rangeSubtitle(),
       sections: [
         {
-          headers: ["Day", "Total Collected", "Transactions", "Cash", "Credit Card", "UPI"],
+          headers: ["Day", "Total Collected", "Transactions", "Cash", "Credit Card", "UPI", "Bills Refunded"],
           rows: lastDayWise.map((r) => [
             formatDate(r.day),
             formatCurrency(r.total_collected),
@@ -257,6 +257,7 @@ function setupAnalyticsDownloads() {
             `${r.cash_count} (${formatCurrency(r.cash_total)})`,
             `${r.credit_card_count} (${formatCurrency(r.credit_card_total)})`,
             `${r.upi_count} (${formatCurrency(r.upi_total)})`,
+            r.refunded_bill_count ? `${r.refunded_bill_count} (${formatCurrency(r.refunded_amount_total)})` : "—",
           ]),
         },
       ],
@@ -270,12 +271,13 @@ function setupAnalyticsDownloads() {
       subtitle: rangeSubtitle(),
       sections: [
         {
-          headers: ["Operator", "Total Billed", "Discount Given", "Amount Collected", "Bills Created", "Payments Taken"],
+          headers: ["Operator", "Total Billed", "Discount Given", "Amount Collected", "Outstanding Balance", "Bills Created", "Payments Taken"],
           rows: lastOperatorWise.map((r) => [
             r.operatorName,
             formatCurrency(r.totalBilled || 0),
             formatCurrency(r.totalDiscount || 0),
             formatCurrency(r.totalCollected || 0),
+            formatCurrency(r.totalPending || 0),
             r.billsCreated || 0,
             r.transactionCount || 0,
           ]),
@@ -311,34 +313,18 @@ function setupAnalyticsDownloads() {
       subtitle: rangeSubtitle(),
       sections: [
         {
-          headers: ["Category", "Behavior", "Bills", "Total Billed"],
+          headers: ["Category", "Behavior", "Bills", "Total Billed", "Discount Given", "Outstanding Balance"],
           rows: lastCategoryWise.map((r) => [
             r.category_name,
             r.category_type || "—",
             r.bill_count || 0,
             formatCurrency(r.total_billed || 0),
+            formatCurrency(r.total_discount || 0),
+            formatCurrency(r.total_outstanding || 0),
           ]),
         },
       ],
       filename: `category-wise-summary_${todayStr()}.pdf`,
-    });
-  });
-
-  document.getElementById("download-company-outstanding-pdf").addEventListener("click", () => {
-    downloadPdfReport({
-      title: "Company Outstanding Balances",
-      subtitle: snapshotSubtitle(),
-      sections: [
-        {
-          headers: ["Company", "Outstanding Balance", "Pending Bills"],
-          rows: lastCompanyOutstanding.map((r) => [
-            r.company_name,
-            formatCurrency(r.outstanding_balance),
-            r.pending_bill_count,
-          ]),
-        },
-      ],
-      filename: `company-outstanding_${todayStr()}.pdf`,
     });
   });
 
@@ -381,12 +367,106 @@ function setupAnalyticsDownloads() {
             b.billNumber,
             formatCurrency(b.netAmount),
             formatCurrency(b.balance),
-            b.status === "fully_paid" ? "Fully Paid" : "Pending",
+            statusLabel(b.status),
             b.transactions.map((t) => `${formatCurrency(t.amountCollected)}${Number(t.discountAmount) > 0 ? ` + ${formatCurrency(t.discountAmount)} discount` : ""} (${t.mode}, ${t.operator.name})`).join("; ") || "—",
           ]),
         },
       ],
       filename: `client-detail_${lastLedgerClientName.replace(/\s+/g, "-").toLowerCase()}_${todayStr()}.pdf`,
+    });
+  });
+
+  document.getElementById("download-all-pdf").addEventListener("click", () => {
+    const sections = [
+      {
+        heading: "Day-wise Summary",
+        headers: ["Day", "Total Collected", "Transactions", "Cash", "Credit Card", "UPI", "Bills Refunded"],
+        rows: lastDayWise.map((r) => [
+          formatDate(r.day),
+          formatCurrency(r.total_collected),
+          r.transaction_count,
+          `${r.cash_count} (${formatCurrency(r.cash_total)})`,
+          `${r.credit_card_count} (${formatCurrency(r.credit_card_total)})`,
+          `${r.upi_count} (${formatCurrency(r.upi_total)})`,
+          r.refunded_bill_count ? `${r.refunded_bill_count} (${formatCurrency(r.refunded_amount_total)})` : "—",
+        ]),
+      },
+      {
+        heading: "Operator-wise Summary",
+        headers: ["Operator", "Total Billed", "Discount Given", "Amount Collected", "Outstanding Balance", "Bills Created", "Payments Taken"],
+        rows: lastOperatorWise.map((r) => [
+          r.operatorName,
+          formatCurrency(r.totalBilled || 0),
+          formatCurrency(r.totalDiscount || 0),
+          formatCurrency(r.totalCollected || 0),
+          formatCurrency(r.totalPending || 0),
+          r.billsCreated || 0,
+          r.transactionCount || 0,
+        ]),
+      },
+      {
+        heading: "Location-wise Summary",
+        headers: ["Location", "Total Billed", "Discount Given", "Pending Amount", "Bills Created"],
+        rows: lastLocationWise.map((r) => [
+          r.location_name,
+          formatCurrency(r.total_billed || 0),
+          formatCurrency(r.total_discount || 0),
+          formatCurrency(r.total_pending || 0),
+          r.bills_created || 0,
+        ]),
+      },
+      {
+        heading: "Category-wise Summary",
+        headers: ["Category", "Behavior", "Bills", "Total Billed", "Discount Given", "Outstanding Balance"],
+        rows: lastCategoryWise.map((r) => [
+          r.category_name,
+          r.category_type || "—",
+          r.bill_count || 0,
+          formatCurrency(r.total_billed || 0),
+          formatCurrency(r.total_discount || 0),
+          formatCurrency(r.total_outstanding || 0),
+        ]),
+      },
+      {
+        heading: "Client Outstanding Balances (current snapshot, not date-filtered)",
+        headers: ["Client", "Outstanding Balance", "Pending Bills"],
+        rows: lastClientOutstanding.map((r) => [
+          r.client_name,
+          formatCurrency(r.outstanding_balance),
+          r.pending_bill_count,
+        ]),
+      },
+    ];
+
+    // Per-Client Detail is only added if a client happens to be selected
+    // right now — it's supplementary, not part of the core shop-wide
+    // report, so its absence isn't an error.
+    if (currentLedgerClientId && lastLedgerClientName) {
+      sections.push(
+        {
+          heading: `Per-Client Detail — ${lastLedgerClientName} — Per-day summary`,
+          headers: ["Day", "Total Collected", "Transactions"],
+          rows: lastClientDaily.map((r) => [formatDate(r.day), formatCurrency(r.total_collected), r.transaction_count]),
+        },
+        {
+          heading: `Per-Client Detail — ${lastLedgerClientName} — Bill ledger (full history)`,
+          headers: ["Bill #", "Net Amount", "Balance", "Status", "Payments"],
+          rows: lastClientLedger.map((b) => [
+            b.billNumber,
+            formatCurrency(b.netAmount),
+            formatCurrency(b.balance),
+            statusLabel(b.status),
+            b.transactions.map((t) => `${formatCurrency(t.amountCollected)}${Number(t.discountAmount) > 0 ? ` + ${formatCurrency(t.discountAmount)} discount` : ""} (${t.mode}, ${t.operator.name})`).join("; ") || "—",
+          ]),
+        }
+      );
+    }
+
+    downloadPdfReport({
+      title: "Full Analytics Report",
+      subtitle: `Date-scoped sections: ${rangeSubtitle()} · Outstanding-balance sections are current snapshots, not date-filtered`,
+      sections,
+      filename: `full-analytics-report_${todayStr()}.pdf`,
     });
   });
 }
