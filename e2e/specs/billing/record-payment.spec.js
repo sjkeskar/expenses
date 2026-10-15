@@ -71,7 +71,7 @@ for (const role of ["operator", "admin"]) {
       const bill = await adminApi.createBill({ originalAmount: 100 });
       await ui.page.reload({ waitUntil: "networkidle" });
       const msg = await ui.recordPayment({ billNumber: bill.billNumber, clientName: bill.client.name, amount: 150 });
-      expect(msg).toBe("amountCollected + discountAmount (150) exceeds the remaining balance (100).");
+      expect(msg).toBe("amountCollected + discountAmount (150.00) exceeds the remaining balance (100.00).");
       await expect(ui.txMsg).toHaveClass(/error/);
     });
 
@@ -97,7 +97,7 @@ for (const role of ["operator", "admin"]) {
       const msg = await ui.recordPayment({
         billNumber: bill.billNumber, clientName: bill.client.name, amount: 60, discount: 50,
       });
-      expect(msg).toBe("amountCollected + discountAmount (110) exceeds the remaining balance (100).");
+      expect(msg).toBe("amountCollected + discountAmount (110.00) exceeds the remaining balance (100.00).");
     });
 
     test("E6: zero or negative amounts are blocked by form validation", async ({ adminApi }) => {
@@ -150,7 +150,6 @@ for (const role of ["operator", "admin"]) {
     });
 
     test("E10: amount + discount that exactly equals a fractional balance is accepted", async ({ adminApi }) => {
-      knownBug("BUG-008");
       // 0.1 + 0.2 = 0.30000000000000004 in floating point, which is > 0.30
       const bill = await adminApi.createBill({ originalAmount: 0.3 });
       await ui.page.reload({ waitUntil: "networkidle" });
@@ -195,7 +194,6 @@ test.describe("Transaction edit/delete (API only — no UI exists, see BUG-006)"
   });
 
   test("E14: deleting a payment on a refunded bill must not silently un-refund it", async ({ adminApi }) => {
-    knownBug("BUG-002");
     const bill = await adminApi.createBill({ originalAmount: 100, initialAmountCollected: 60 });
     const [tx] = (await adminApi.getBill(bill.id)).transactions;
     await adminApi.refund(bill.id);
@@ -206,7 +204,6 @@ test.describe("Transaction edit/delete (API only — no UI exists, see BUG-006)"
   });
 
   test("E15: editing a payment on a refunded bill must not silently un-refund it", async ({ adminApi }) => {
-    knownBug("BUG-002");
     const bill = await adminApi.createBill({ originalAmount: 100, initialAmountCollected: 60 });
     const [tx] = (await adminApi.getBill(bill.id)).transactions;
     await adminApi.refund(bill.id);

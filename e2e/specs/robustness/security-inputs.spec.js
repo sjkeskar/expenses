@@ -1,5 +1,5 @@
 // K1–K4, K6: hostile and unusual input, double submits, server errors.
-const { test, expect, knownBug } = require("../../fixtures");
+const { test, expect } = require("../../fixtures");
 const { BillingPage } = require("../../pages/billing");
 const { AdminPage } = require("../../pages/admin");
 const { DeveloperPage } = require("../../pages/developer");
@@ -18,7 +18,6 @@ async function xssFired(page) {
 
 test.describe("Stored XSS (K1)", () => {
   test("K1a: a client name containing HTML is shown as text, never executed (operator & admin billing)", async ({ api, loginAs, users }) => {
-    knownBug("BUG-004");
     const tag = uid("cx");
     const op = await api(users.op1);
     const bill = await op.createBill({ clientName: payload(tag), initialAmountCollected: 1 });
@@ -39,7 +38,6 @@ test.describe("Stored XSS (K1)", () => {
   });
 
   test("K1b: client names are not executed in analytics (admin & accountant)", async ({ adminApi, loginAs, users }) => {
-    knownBug("BUG-004");
     const tag = uid("ax");
     await adminApi.createBill({ clientName: payload(tag), originalAmount: 10 });
     for (const user of [users.admin, users.acct]) {
@@ -59,7 +57,6 @@ test.describe("Stored XSS (K1)", () => {
   });
 
   test("K1c: location, category and company names are not executed", async ({ adminApi, loginAs, users }) => {
-    knownBug("BUG-004");
     const tag = uid("lx");
     await adminApi.addLocation({ name: payload(`${tag}-loc`), locationCode: "03" });
     await adminApi.addCategory({ name: payload(`${tag}-cat`), type: "credit", companyName: payload(`${tag}-co`) });
@@ -75,7 +72,6 @@ test.describe("Stored XSS (K1)", () => {
   });
 
   test("K1d: user names are not executed on the developer page", async ({ loginAs, users }) => {
-    knownBug("BUG-004");
     const tag = uid("ux");
     await createUser("operator", { name: payload(tag) });
     const page = await loginAs(users.dev);
@@ -130,7 +126,6 @@ test.describe("Unusual input (K2, K3)", () => {
 
 test.describe("Double submits and server errors (K4, K6)", () => {
   test("K4a: double-clicking Create Bill creates exactly one bill", async ({ loginAs }) => {
-    knownBug("BUG-010");
     const user = await createUser("operator");
     const ui = new BillingPage(await loginAs(user));
     const client = uid("Dbl");
@@ -144,7 +139,6 @@ test.describe("Double submits and server errors (K4, K6)", () => {
   });
 
   test("K4b: double-clicking Record Payment records exactly one payment", async ({ loginAs, adminApi }) => {
-    knownBug("BUG-010");
     const bill = await adminApi.createBill({ originalAmount: 100 });
     const ui = new BillingPage(await loginAs(await createUser("operator")));
     await ui.txBill.pick(bill.billNumber, `${bill.billNumber} — ${bill.client.name}`);
@@ -153,6 +147,39 @@ test.describe("Double submits and server errors (K4, K6)", () => {
     await expect(ui.txMsg).toHaveText("Payment recorded.");
     await ui.page.waitForTimeout(1000);
     expect((await findBillByNumber(bill.billNumber)).transactions).toHaveLength(1);
+  });
+
+  test("K4c: double-clicking Settle Selected Bills settles once and reports success", async ({ loginAs, adminApi }) => {
+    const { company, category } = await adminApi.addCreditCategory();
+    const bill = await adminApi.createBill({ categoryId: category.id, originalAmount: 300 });
+    const ui = new BillingPage(await loginAs(await createUser("operator")));
+    await ui.selectSettleCompany(company.name);
+    await ui.settleCheckbox(bill.billNumber).check();
+    await ui.settleSubmit.dblclick();
+    await expect(ui.settleMsg).toHaveClass(/success/);
+    await ui.page.waitForTimeout(1000);
+    await expect(ui.settleMsg).toHaveClass(/success/); // no late "not pending" error from a 2nd click
+    expect((await findBillByNumber(bill.billNumber)).transactions).toHaveLength(1);
+  });
+
+  test("K4d: submit buttons are disabled while a request is in flight and re-enabled after an error", async ({ loginAs, users }) => {
+    const ui = new BillingPage(await loginAs(users.op1));
+    let release;
+    const gate = new Promise((r) => (release = r));
+    await ui.page.route("**/api/bills", async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      await gate;
+      await route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: "Nope." }) });
+    });
+    await ui.fillBill({
+      client: uid("Busy"), newClient: true, category: BASELINE.standardCategory.name,
+      location: BASELINE.location.name, original: 10,
+    });
+    await ui.createBillButton.click();
+    await expect(ui.createBillButton).toBeDisabled();
+    release();
+    await expect(ui.billMsg).toHaveText("Nope.");
+    await expect(ui.createBillButton).toBeEnabled();
   });
 
   test("K6: a server error is shown as a message, not a hang", async ({ loginAs, users }) => {
@@ -179,3 +206,28 @@ test.describe("Double submits and server errors (K4, K6)", () => {
   });
 });
 
+test.describe("Defence-in-depth headers (K7, K8)", () => {
+  test("K7: pages send a Content-Security-Policy that blocks inline scripts and handlers", async ({ loginAs, users, page }) => {
+    const res = await page.request.get("/operator.html");
+    const csp = res.headers()["content-security-policy"] || "";
+    expect(csp).toContain("script-src 'self'");
+    expect(csp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
+
+    // Even if some future code forgets escapeHtml(), an injected handler must not run.
+    const p = await loginAs(users.op1);
+    await p.evaluate(() => {
+      const div = document.createElement("div");
+      div.innerHTML = `<img src="x" onerror="window.__cspBypass = true">`;
+      document.body.appendChild(div);
+    });
+    await p.waitForTimeout(500);
+    expect(await p.evaluate(() => window.__cspBypass === true)).toBe(false);
+  });
+
+  test("K8: API responses are never cacheable", async ({ adminApi }) => {
+    for (const path of ["/auth/me", "/bills", "/clients"]) {
+      const res = await adminApi.ctx.fetch(`/api${path}`);
+      expect(res.headers()["cache-control"], path).toBe("no-store");
+    }
+  });
+});

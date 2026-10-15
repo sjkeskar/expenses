@@ -1,6 +1,6 @@
 // B1–B6: the shared Change Password modal, on every role page. Always runs
 // against a throwaway user so the seeded accounts keep their passwords.
-const { test, expect, knownBug } = require("../../fixtures");
+const { test, expect } = require("../../fixtures");
 const { createUser } = require("../../helpers/db");
 const { ChangePasswordModal } = require("../../pages/components");
 const { LoginPage } = require("../../pages/login");
@@ -13,7 +13,6 @@ for (const role of ROLES) {
     test(`B1: ${role} changes password, is forced to re-login, old password stops working`, async ({ loginAs, page }) => {
       // BUG-001: on developer.html the modal reads the Create User form's
       // password field (duplicate id="new-password"), so this flow breaks.
-      if (role === "developer") knownBug("BUG-001");
 
       const user = await createUser(role);
       const rolePage = await loginAs(user);
@@ -35,7 +34,6 @@ for (const role of ROLES) {
     });
 
     test(`B2: ${role} gets an error for a wrong current password`, async ({ loginAs }) => {
-      if (role === "developer") knownBug("BUG-001");
       const user = await createUser(role);
       const modal = new ChangePasswordModal(await loginAs(user));
       await modal.change("Wrong@999", NEW_PASSWORD);
@@ -67,6 +65,23 @@ for (const role of ROLES) {
     });
   });
 }
+
+test("B6: on developer.html, text in the Create User form never leaks into Change Password", async ({ loginAs, page }) => {
+  const user = await createUser("developer");
+  const devPage = await loginAs(user);
+  await devPage.locator("#create-user-form #new-name").fill("someone-else");
+  await devPage.locator("#create-user-password").fill("Unrelated#9");
+  const modal = new ChangePasswordModal(devPage);
+  await modal.change(user.password, NEW_PASSWORD);
+  await expect(devPage).toHaveURL(/login\.html$/, { timeout: 5000 });
+
+  const login = new LoginPage(page);
+  await login.goto();
+  await login.login(user.name, "Unrelated#9");
+  await expect(login.msg).toHaveText("Invalid name or password.");
+  await login.login(user.name, NEW_PASSWORD);
+  await expect(page).toHaveURL(/developer\.html$/);
+});
 
 test.describe("Password policy (B4)", () => {
   const CASES = [

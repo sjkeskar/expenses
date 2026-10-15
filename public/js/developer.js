@@ -31,19 +31,19 @@ async function loadUsers() {
 
       if (!u.isDeleted) {
         if (u.role === "operator") {
-          actions.push(`<button class="secondary" data-action="promote" data-id="${u.id}">Promote to Admin</button>`);
+          actions.push(`<button class="secondary" data-action="promote" data-id="${escapeHtml(u.id)}">Promote to Admin</button>`);
         }
         if (u.role === "admin") {
-          actions.push(`<button class="secondary" data-action="demote" data-id="${u.id}">Demote to Operator</button>`);
+          actions.push(`<button class="secondary" data-action="demote" data-id="${escapeHtml(u.id)}">Demote to Operator</button>`);
         }
         if (u.id !== currentUserId) {
-          actions.push(`<button class="danger" data-action="deactivate" data-id="${u.id}">Deactivate</button>`);
+          actions.push(`<button class="danger" data-action="deactivate" data-id="${escapeHtml(u.id)}">Deactivate</button>`);
         }
       }
 
       return `<tr>
-        <td>${u.name}</td>
-        <td><span class="badge role-${u.role}">${u.role}</span></td>
+        <td>${escapeHtml(u.name)}</td>
+        <td><span class="badge role-${escapeHtml(u.role)}">${escapeHtml(u.role)}</span></td>
         <td>${status}</td>
         <td>${formatDateTime(u.createdAt)}</td>
         <td>${actions.join(" ") || "—"}</td>
@@ -81,7 +81,7 @@ async function handleAction(action, id) {
 document.getElementById("create-user-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const name = document.getElementById("new-name").value.trim();
-  const password = document.getElementById("new-password").value;
+  const password = document.getElementById("create-user-password").value;
   const role = document.getElementById("new-role").value;
   const msg = document.getElementById("create-msg");
 
@@ -89,7 +89,7 @@ document.getElementById("create-user-form").addEventListener("submit", async (e)
     const { user } = await api("/users", { method: "POST", body: { name, password, role } });
     showMessage(msg, `User "${user.name}" created as ${user.role}.`, false);
     document.getElementById("new-name").value = "";
-    document.getElementById("new-password").value = "";
+    document.getElementById("create-user-password").value = "";
     await loadUsers();
   } catch (err) {
     showMessage(msg, err.message, true);

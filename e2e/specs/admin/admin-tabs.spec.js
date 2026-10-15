@@ -136,13 +136,10 @@ test.describe("Admin tabs", () => {
       });
 
       await ui.openTab("reassign");
-      await expect(async () => {
-        await ui.reassign.bill.input.fill(billNumber);
-        await expect(ui.reassign.bill.item(`${billNumber} — ${client.name}`)).toContainText(
-          "Current operator: Unattributed (legacy bill)",
-          { timeout: 1000 }
-        );
-      }).toPass({ timeout: 10_000 });
+      await ui.reassign.bill.input.fill(billNumber);
+      await expect(ui.reassign.bill.item(`${billNumber} — ${client.name}`)).toContainText(
+        "Current operator: Unattributed (legacy bill)"
+      );
       ui.page.once("dialog", (d) => d.accept());
       await ui.reassign.bill.pick(billNumber, `${billNumber} — ${client.name}`);
       await ui.reassign.target.selectOption({ label: `${op.name} (operator)` });

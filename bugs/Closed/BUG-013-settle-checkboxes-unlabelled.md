@@ -2,14 +2,14 @@
 
 | Field | Value |
 |---|---|
-| Status | Open |
+| Status | Closed |
 | Severity | Medium |
 | Area | Operator / Admin UI: Settle Company Balance (`public/js/operator.js`, `public/js/admin.js`, `public/operator.html`, `public/admin.html`) |
 | Reported | 2026-10-15 |
 | Found by | E2E `accessibility/axe.spec.js` › M2/BUG-013 (axe rules `label` [critical], `empty-table-header` [minor]) |
 | Assignee | — |
-| Resolution | — |
-| Verified by | — |
+| Resolution | Batch 6 of `bugs/FIX-PLAN.md` — escaped `aria-label` on each settle checkbox (operator.js, admin.js) and a `.visually-hidden` "Select" header (operator.html, admin.html, style.css) |
+| Verified by | `accessibility/axe.spec.js` › M2/BUG-013, green in three full `npm run test:e2e` runs (4 and 8 workers) on 2026-10-16 |
 
 ## Summary
 

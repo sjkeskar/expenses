@@ -6,7 +6,7 @@ class DeveloperPage {
   constructor(page) {
     this.page = page;
     this.name = page.locator("#create-user-form #new-name");
-    this.password = page.locator("#create-user-form #new-password");
+    this.password = page.locator("#create-user-password");
     this.role = page.locator("#new-role");
     this.submit = page.locator('#create-user-form button[type="submit"]');
     this.createMsg = page.locator("#create-msg");

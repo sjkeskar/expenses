@@ -23,7 +23,10 @@ module.exports = defineConfig({
   timeout: 30_000,
   expect: {
     timeout: 5_000,
-    toHaveScreenshot: { maxDiffPixelRatio: 0.002, animations: "disabled", caret: "hide" },
+    // Rendering is deterministic (mocked API, frozen clock, no web fonts), so the
+    // tolerance is tight: a ratio-based limit let a badge text-colour change
+    // (a few hundred anti-aliased glyph pixels) slip through.
+    toHaveScreenshot: { maxDiffPixels: 10, threshold: 0.05, animations: "disabled", caret: "hide" },
   },
   // Visual baselines (specs/visual): one folder, platform-specific names.
   snapshotPathTemplate: "e2e/__screenshots__/{testFilePath}/{arg}-{projectName}-{platform}{ext}",

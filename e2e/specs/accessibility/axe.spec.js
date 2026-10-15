@@ -1,12 +1,17 @@
 // M2: automated accessibility scans (axe-core, WCAG 2.1 A/AA + best
 // practices) of every page and the interactive states that render extra UI.
 //
-// Each state is scanned twice:
-//   - "no new violations": every rule EXCEPT the ones tied to an open bug, so
-//     any new problem fails immediately;
-//   - one knownBug test per open a11y bug, scanning only that bug's rules.
+// Each state gets a full scan ("no violations"): every rule except those tied
+// to a still-open bug (OPEN_BUG_RULES — none at the moment), so any new problem
+// fails immediately.
+//
+// The rules behind the a11y bugs fixed so far (BUG_RULES) are also scanned on
+// their own, against the exact states that used to fail, as named regression
+// tests — so a reintroduced bug fails under its own ID, not as an anonymous
+// scan failure. When a new a11y bug is filed: add its rules to BUG_RULES and
+// OPEN_BUG_RULES, and add a knownBug test below.
 const AxeBuilder = require("@axe-core/playwright").default;
-const { test, expect, knownBug } = require("../../fixtures");
+const { test, expect } = require("../../fixtures");
 const { BillingPage } = require("../../pages/billing");
 const { AdminPage } = require("../../pages/admin");
 const { AnalyticsSection } = require("../../pages/analytics");
@@ -15,21 +20,22 @@ const { createUser } = require("../../helpers/db");
 
 const TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"];
 
-// Rules currently failing because of an open bug.
-const KNOWN = {
+// axe rules behind each accessibility bug (all closed — see bugs/Closed/).
+const BUG_RULES = {
   "BUG-012": ["color-contrast"],
   "BUG-013": ["label", "empty-table-header"],
   "BUG-014": ["aria-required-attr", "aria-required-parent"],
   "BUG-017": ["landmark-one-main", "region"],
 };
-const ALL_KNOWN_RULES = Object.values(KNOWN).flat();
+// Rules excluded from the full scan because their bug is still open.
+const OPEN_BUG_RULES = [];
 
 function describeViolations(violations) {
   return violations.map((v) => `${v.id} (${v.impact}): ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`);
 }
 
-async function scanExcludingKnown(page) {
-  const { violations } = await new AxeBuilder({ page }).withTags(TAGS).disableRules(ALL_KNOWN_RULES).analyze();
+async function scanExcludingOpenBugs(page) {
+  const { violations } = await new AxeBuilder({ page }).withTags(TAGS).disableRules(OPEN_BUG_RULES).analyze();
   return describeViolations(violations);
 }
 
@@ -105,45 +111,41 @@ for (const tab of ["billing", "analytics", "promote", "reassign", "locations", "
   };
 }
 
-test.describe("Accessibility scan — no violations beyond known open bugs", () => {
+test.describe("Accessibility scan — no violations", () => {
   for (const [name, build] of Object.entries(STATES)) {
     test(`M2: ${name}`, async ({ page, loginAs, api, adminApi, users }) => {
-    const fixtures = { page, loginAs, api, adminApi, users };
+      const fixtures = { page, loginAs, api, adminApi, users };
       const built = await build(fixtures);
-      expect(await scanExcludingKnown(built)).toEqual([]);
+      expect(await scanExcludingOpenBugs(built)).toEqual([]);
     });
   }
 });
 
-test.describe("Accessibility — known open bugs", () => {
+test.describe("Accessibility — regression tests for fixed bugs", () => {
   test("M2/BUG-012: status and role badges meet WCAG AA colour contrast", async ({ page, loginAs, api, adminApi, users }) => {
     const fixtures = { page, loginAs, api, adminApi, users };
-    knownBug("BUG-012");
     const violations = [
-      ...(await scanOnly(await STATES["operator page with bills in every status, settle list and an open dropdown"](fixtures), KNOWN["BUG-012"])),
-      ...(await scanOnly(await STATES["developer page with every role badge"](fixtures), KNOWN["BUG-012"])),
+      ...(await scanOnly(await STATES["operator page with bills in every status, settle list and an open dropdown"](fixtures), BUG_RULES["BUG-012"])),
+      ...(await scanOnly(await STATES["developer page with every role badge"](fixtures), BUG_RULES["BUG-012"])),
     ];
     expect(violations).toEqual([]);
   });
 
   test("M2/BUG-013: settle-list checkboxes and table headers have accessible names", async ({ page, loginAs, api, adminApi, users }) => {
     const fixtures = { page, loginAs, api, adminApi, users };
-    knownBug("BUG-013");
     const built = await STATES["operator page with bills in every status, settle list and an open dropdown"](fixtures);
-    expect(await scanOnly(built, KNOWN["BUG-013"])).toEqual([]);
+    expect(await scanOnly(built, BUG_RULES["BUG-013"])).toEqual([]);
   });
 
   test("M2/BUG-014: an open combobox exposes valid listbox/option ARIA", async ({ page, loginAs, api, adminApi, users }) => {
     const fixtures = { page, loginAs, api, adminApi, users };
-    knownBug("BUG-014");
     const built = await STATES["operator page with bills in every status, settle list and an open dropdown"](fixtures);
-    expect(await scanOnly(built, KNOWN["BUG-014"])).toEqual([]);
+    expect(await scanOnly(built, BUG_RULES["BUG-014"])).toEqual([]);
   });
 
   test("M2/BUG-017: the login page has a main landmark containing its content", async ({ page, loginAs, api, adminApi, users }) => {
     const fixtures = { page, loginAs, api, adminApi, users };
-    knownBug("BUG-017");
     const built = await STATES["login page with an error message"](fixtures);
-    expect(await scanOnly(built, KNOWN["BUG-017"])).toEqual([]);
+    expect(await scanOnly(built, BUG_RULES["BUG-017"])).toEqual([]);
   });
 });

@@ -44,6 +44,11 @@ blocked. Screenshots therefore depend only on the HTML/CSS/JS. Baselines
 are committed in `e2e/__screenshots__/` and are **platform-specific**
 (`…-chromium-linux.png`): a different OS needs its own baselines.
 
+The comparison tolerance is deliberately tight (at most 10 pixels, each
+within a 0.05 colour threshold), because the rendering is fully
+deterministic. A looser ratio-based limit once let a badge text-colour change
+pass unnoticed.
+
 When a snapshot fails, open the HTML report to see expected, actual and the
 diff. If the change was intended, run `npm run test:e2e:update-snapshots`
 and commit the new PNGs together with the UI change.
@@ -122,19 +127,19 @@ IDs match the test plan. Each test title starts with its ID.
 |---|---|---|
 | Login, guards, logout, session lifetime, restart | A1–A12 | `auth/login`, `auth/session` |
 | API permission matrix (all roles × all endpoints) | A11, J2, K5 | `auth/api-permissions` |
-| Change password (all 4 pages) + policy | B1–B5 | `auth/change-password` |
+| Change password (all 4 pages) + policy, field isolation on developer.html | B1–B6 | `auth/change-password` |
 | Developer user management, live-session effects | C1–C9 | `developer/users`, `auth/session` |
 | Create Bill (operator + admin), IST bill date | D1–D21 | `billing/create-bill` |
 | Bill numbering, rollover, 9999 cap, concurrency | D14–D16, L1 | `billing/bill-number` |
 | Record Payment, transaction edit/delete API | E1–E16 | `billing/record-payment` |
-| Settle Company Balance | F1–F13 | `billing/settle` |
+| Settle Company Balance | F1–F14 | `billing/settle` |
 | My Bills totals, Refund modal | G1–G5 | `billing/my-bills-refund` |
 | My Bills PDF, every analytics PDF | G7, I8 | `analytics/pdf-export` |
 | Admin tabs: promote, reassign, locations, categories | H0–H11 | `admin/admin-tabs` |
 | Analytics tables, IST day bucketing, refunds, reconciliation | I1–I9, G6 | `analytics/analytics` |
 | Accountant is read-only | J1, J2 | `analytics/analytics`, `auth/api-permissions` |
-| XSS, Unicode, junk input, double submit, server errors | K1–K6 | `robustness/security-inputs` |
+| XSS, Unicode, junk input, double submit, server errors, CSP and no-store headers | K1–K8 | `robustness/security-inputs` |
 | Concurrent writes on one bill | L2–L6 | `robustness/concurrency` |
 | Visual regression of every page/state | M1 | `visual/visual` |
 | Accessibility scans (WCAG 2.1 A/AA + best practice) | M2 | `accessibility/axe` |
-| Keyboard-only workflows, focus visibility, modal focus | M3 | `accessibility/keyboard` |
+| Keyboard-only workflows, focus visibility, modal focus, combobox timing | M3a–M3j | `accessibility/keyboard` |

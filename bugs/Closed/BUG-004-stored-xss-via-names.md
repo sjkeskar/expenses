@@ -2,14 +2,14 @@
 
 | Field | Value |
 |---|---|
-| Status | Open |
+| Status | Closed |
 | Severity | Critical |
 | Area | All role pages (`public/js/*.js`) |
 | Reported | 2026-10-15 |
 | Found by | Code review; confirmed by E2E `robustness/security-inputs.spec.js` › K1a–K1d |
 | Assignee | — |
-| Resolution | — |
-| Verified by | — |
+| Resolution | Batch 3 of `bugs/FIX-PLAN.md` — `escapeHtml()` in `public/js/common.js`, applied at every `innerHTML` interpolation of user-typed text (and once inside `attachCombobox`, covering all 13 combobox call sites), plus a Content-Security-Policy header in `src/server.js` |
+| Verified by | `robustness/security-inputs.spec.js` › K1a, K1b, K1c, K1d, green in a full `npm run test:e2e` run on 2026-10-15 |
 
 ## Summary
 

@@ -1,6 +1,6 @@
 // M3: everything an operator does daily must work from the keyboard alone,
 // with a logical tab order, visible focus, and properly behaved modals.
-const { test, expect, knownBug } = require("../../fixtures");
+const { test, expect } = require("../../fixtures");
 const { BillingPage } = require("../../pages/billing");
 const { AdminPage } = require("../../pages/admin");
 const { createUser, findBillByNumber, db } = require("../../helpers/db");
@@ -19,13 +19,12 @@ async function tabTo(page, id, limit = 40) {
 }
 
 // Sequence of distinct focused ids while tabbing `count` times from the current
-// element. Tabs at a human pace: combobox lists linger ~150ms after blur
-// (BUG-009) and, being scrollable, are themselves a Tab stop while visible.
+// element, at full speed (no pauses: BUG-009/BUG-018 guarded against lists
+// lingering or becoming Tab stops).
 async function tabSequence(page, count) {
   const seen = [await activeId(page)];
   while (seen.length < count) {
     await page.keyboard.press("Tab");
-    await page.waitForTimeout(200);
     const id = await activeId(page);
     if (id !== seen[seen.length - 1]) seen.push(id); // date inputs take several Tabs (d/m/y)
   }
@@ -44,7 +43,6 @@ test.describe("Keyboard-only workflows", () => {
   });
 
   test("M3b: Create Bill tab order follows the visual order (with a realistic client list)", async ({ loginAs, users }) => {
-    knownBug("BUG-018");
     // A real shop has many clients: enough that the suggestion list scrolls.
     await db().client.createMany({ data: Array.from({ length: 25 }, () => ({ name: uid("TabOrder") })) });
     const page = await loginAs(users.op1);
@@ -115,7 +113,10 @@ test.describe("Keyboard-only workflows", () => {
     const page = ui.page;
 
     await tabTo(page, "settle-company-input");
-    await page.keyboard.type(company.name);
+    // A unique prefix, not the full name: typing the exact name selects it a
+    // first time and Enter a second time, and that double load can wipe the
+    // ticks below (BUG-019, tested on its own in billing/settle.spec.js F14).
+    await page.keyboard.type(company.name.slice(0, -1));
     await page.keyboard.press("Enter");
     await expect(ui.settleTable.locator(".settle-bill-checkbox")).toHaveCount(2);
     await page.keyboard.press("Tab"); // mode select
@@ -159,7 +160,6 @@ test.describe("Keyboard-only workflows", () => {
   });
 
   test("M3g: inputs and selects show the explicit 2px keyboard focus ring", async ({ loginAs, users }) => {
-    knownBug("BUG-016");
     const p = await loginAs(users.op1);
     await p.locator("#bill-client-input").focus();
     const weak = [];
@@ -178,7 +178,6 @@ test.describe("Keyboard-only workflows", () => {
 test.describe("Modal dialogs (BUG-015)", () => {
   for (const which of ["change-password", "refund"]) {
     test(`M3h: ${which} modal — focus moves in, is trapped, Escape closes, focus returns`, async ({ loginAs, api }) => {
-      knownBug("BUG-015");
       const user = await createUser("operator");
       await (await api(user)).createBill({ initialAmountCollected: 10 });
       const page = await loginAs(user);
@@ -204,4 +203,42 @@ test.describe("Modal dialogs (BUG-015)", () => {
       await expect(opener).toBeFocused();
     });
   }
+});
+
+test.describe("Modal dialogs — remaining keyboard paths", () => {
+  test("M3i: Shift+Tab wraps backwards; Cancel and backdrop-click both return focus to the opener", async ({ loginAs, users }) => {
+    const page = await loginAs(users.op1);
+    const opener = page.locator("#change-password-btn");
+    const modal = page.locator("#change-password-modal");
+
+    await opener.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator("#current-password")).toBeFocused();
+    await page.keyboard.press("Shift+Tab"); // from the first control...
+    await expect(modal.locator('button[type="submit"]')).toBeFocused(); // ...to the last
+    await expect(modal.locator(".modal-box")).toHaveAttribute("aria-labelledby", /.+/);
+
+    await page.locator("#change-password-cancel").click();
+    await expect(modal).toBeHidden();
+    await expect(opener).toBeFocused();
+
+    await opener.focus();
+    await page.keyboard.press("Enter");
+    await modal.click({ position: { x: 5, y: 5 } });
+    await expect(modal).toBeHidden();
+    await expect(opener).toBeFocused();
+  });
+});
+
+test.describe("Combobox timing (BUG-009 regression)", () => {
+  test("M3j: re-focusing a search field within 150ms of leaving it keeps its list open", async ({ loginAs, users }) => {
+    const page = await loginAs(users.op1);
+    const ui = new BillingPage(page);
+    await ui.category.input.focus();
+    await ui.category.input.blur(); // starts the 150ms delayed hide
+    await ui.category.input.focus(); // ...and comes straight back
+    await page.keyboard.type("E2E");
+    await page.waitForTimeout(400); // well past the old stale timer
+    await expect(ui.category.dropdown).toBeVisible();
+  });
 });

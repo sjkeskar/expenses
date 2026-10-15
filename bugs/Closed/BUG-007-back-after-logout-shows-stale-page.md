@@ -2,14 +2,14 @@
 
 | Field | Value |
 |---|---|
-| Status | Open |
+| Status | Closed |
 | Severity | Low |
 | Area | Auth / HTTP caching (`src/server.js`) |
 | Reported | 2026-10-15 |
 | Found by | E2E `auth/login.spec.js` › A8b (all four roles) |
 | Assignee | — |
-| Resolution | — |
-| Verified by | — |
+| Resolution | Batch 2 of `bugs/FIX-PLAN.md` — `Cache-Control: no-store` on every `/api/*` response in `src/server.js` |
+| Verified by | `auth/login.spec.js` › A8b (all four roles), green in a full `npm run test:e2e` run on 2026-10-15 |
 
 ## Summary
 

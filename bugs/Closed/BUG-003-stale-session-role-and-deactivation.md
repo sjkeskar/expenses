@@ -2,14 +2,14 @@
 
 | Field | Value |
 |---|---|
-| Status | Open |
+| Status | Closed |
 | Severity | High |
 | Area | Auth / sessions (`src/middleware/auth.js`, `src/routes/auth.js`) |
 | Reported | 2026-10-15 |
 | Found by | Code review; confirmed by E2E `auth/session.spec.js` › C9a, C9b |
 | Assignee | — |
-| Resolution | — |
-| Verified by | — |
+| Resolution | Batch 2 of `bugs/FIX-PLAN.md` — `requireAuth` in `src/middleware/auth.js` re-reads the user on every request |
+| Verified by | `auth/session.spec.js` › C9a, C9b, green in a full `npm run test:e2e` run on 2026-10-15 |
 
 ## Summary
 

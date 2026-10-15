@@ -149,7 +149,7 @@ async function loadAnalytics() {
     .map(
       (r) => `
       <tr>
-        <td>${r.operatorName}</td>
+        <td>${escapeHtml(r.operatorName)}</td>
         <td>${formatCurrency(r.totalBilled || 0)}</td>
         <td>${formatCurrency(r.totalDiscount || 0)}</td>
         <td>${formatCurrency(r.totalCollected || 0)}</td>
@@ -164,7 +164,7 @@ async function loadAnalytics() {
     .map(
       (r) => `
       <tr>
-        <td>${r.location_name}</td>
+        <td>${escapeHtml(r.location_name)}</td>
         <td>${formatCurrency(r.total_billed || 0)}</td>
         <td>${formatCurrency(r.total_discount || 0)}</td>
         <td>${formatCurrency(r.total_pending || 0)}</td>
@@ -177,8 +177,8 @@ async function loadAnalytics() {
     .map(
       (r) => `
       <tr>
-        <td>${r.category_name}</td>
-        <td>${r.category_type || "—"}</td>
+        <td>${escapeHtml(r.category_name)}</td>
+        <td>${r.category_type ? escapeHtml(r.category_type) : "—"}</td>
         <td>${r.bill_count || 0}</td>
         <td>${formatCurrency(r.total_billed || 0)}</td>
         <td>${formatCurrency(r.total_discount || 0)}</td>
@@ -190,7 +190,7 @@ async function loadAnalytics() {
   document.querySelector("#client-outstanding-table tbody").innerHTML = clientOutstanding.clientOutstanding
     .map(
       (r) =>
-        `<tr><td>${r.client_name}</td><td>${formatCurrency(r.outstanding_balance)}</td><td>${r.pending_bill_count}</td></tr>`
+        `<tr><td>${escapeHtml(r.client_name)}</td><td>${formatCurrency(r.outstanding_balance)}</td><td>${r.pending_bill_count}</td></tr>`
     )
     .join("");
 
@@ -223,13 +223,13 @@ async function loadClientDetail() {
   document.querySelector("#client-ledger-table tbody").innerHTML = ledger.ledger
     .map((b) => {
       const payments = b.transactions
-        .map((t) => `${formatCurrency(t.amountCollected)}${Number(t.discountAmount) > 0 ? ` + ${formatCurrency(t.discountAmount)} discount` : ""} (${t.mode}, ${t.operator.name})`)
+        .map((t) => `${formatCurrency(t.amountCollected)}${Number(t.discountAmount) > 0 ? ` + ${formatCurrency(t.discountAmount)} discount` : ""} (${escapeHtml(t.mode)}, ${escapeHtml(t.operator.name)})`)
         .join("; ") || "—";
       return `<tr>
-        <td>${b.billNumber}</td>
+        <td>${escapeHtml(b.billNumber)}</td>
         <td>${formatCurrency(b.netAmount)}</td>
         <td>${formatCurrency(b.balance)}</td>
-        <td><span class="badge ${b.status}">${statusLabel(b.status)}</span></td>
+        <td><span class="badge ${escapeHtml(b.status)}">${statusLabel(b.status)}</span></td>
         <td>${payments}</td>
       </tr>`;
     })

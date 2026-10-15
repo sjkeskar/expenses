@@ -9,6 +9,7 @@
 const { test: base, expect } = require("@playwright/test");
 const { mockApi, FROZEN_NOW } = require("../../helpers/mock-api");
 const { Combobox } = require("../../pages/components");
+const { AdminPage } = require("../../pages/admin");
 
 const test = base.extend({
   // Opens /<role>.html (or login) with mocked data and a frozen clock.
@@ -82,8 +83,7 @@ test.describe("Visual snapshots", () => {
   for (const tab of ["billing", "analytics", "promote", "reassign", "locations", "categories"]) {
     test(`M1: admin — ${tab} tab`, async ({ open }) => {
       const page = await open("admin");
-      await page.locator(`.tabs button[data-tab="${tab}"]`).click();
-      await page.waitForLoadState("networkidle");
+      await new AdminPage(page).openTab(tab); // waits for that tab's own data
       if (tab === "reassign") {
         await new Combobox(page, "reassign-bill").pick("0126100002", "0126100002 — Bharat Stores");
         await expect(page.locator("#reassign-history-table")).toBeVisible();

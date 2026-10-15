@@ -2,14 +2,14 @@
 
 | Field | Value |
 |---|---|
-| Status | Open |
+| Status | Closed |
 | Severity | Medium |
 | Area | Shared styles (`public/css/style.css`) |
 | Reported | 2026-10-15 |
 | Found by | E2E `accessibility/axe.spec.js` › M2/BUG-012 (axe rule `color-contrast`) |
 | Assignee | — |
-| Resolution | — |
-| Verified by | — |
+| Resolution | Batch 7 of `bugs/FIX-PLAN.md` — `.badge.fully_paid` text #256b42 (5.58:1), `.badge.role-admin` text #8a5a12 (5.16:1), and `white-space: nowrap` on `.badge` in `public/css/style.css` |
+| Verified by | `accessibility/axe.spec.js` › M2/BUG-012; visual baselines re-recorded and reviewed; green in three full `npm run test:e2e` runs (4 and 8 workers) on 2026-10-16 |
 
 ## Summary
 

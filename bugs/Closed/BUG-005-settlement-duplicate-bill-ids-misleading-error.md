@@ -2,14 +2,14 @@
 
 | Field | Value |
 |---|---|
-| Status | Open |
+| Status | Closed |
 | Severity | Low |
 | Area | Settlement API (`src/routes/companies.js`) |
 | Reported | 2026-10-15 |
 | Found by | Code review; confirmed by E2E `billing/settle.spec.js` › F12 |
 | Assignee | — |
-| Resolution | — |
-| Verified by | — |
+| Resolution | Batch 1 of `bugs/FIX-PLAN.md` — duplicate bill ids rejected up front in `src/routes/companies.js` |
+| Verified by | `billing/settle.spec.js` › F12, green in a full `npm run test:e2e` run on 2026-10-15 |
 
 ## Summary
 

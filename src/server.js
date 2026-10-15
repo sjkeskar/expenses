@@ -60,6 +60,52 @@ const app = express();
 app.use(express.json());
 app.use(sessionMiddleware);
 
+// Content-Security-Policy — defence in depth behind escapeHtml() in
+// public/js/common.js, so that a future unescaped interpolation is a bug
+// rather than a working stored-XSS hole (see bugs/Closed/BUG-004).
+// Applies to every response, including the role pages themselves.
+//
+// Two notes for anyone tempted to tighten this later:
+//
+// - script-src 'self' is what actually neutralises an injected
+//   `onerror=` handler. It is safe as written because there is not one
+//   inline <script> block or on*= attribute anywhere in public/*.html —
+//   all page scripts are separate files under public/js and
+//   public/vendor. Keep it that way.
+// - style-src MUST keep 'unsafe-inline'. CSP's style-src governs inline
+//   style="..." attributes too, and the pages carry 68 of them
+//   (admin.html 37, operator.html 16, accountant.html 11,
+//   developer.html 4) — they are how every modal and collapsed panel is
+//   shown and hidden. Dropping 'unsafe-inline' silently breaks all of
+//   them, with no error beyond a console warning.
+//
+// The font directives are for the Google Fonts stylesheet the pages link.
+const CSP =
+  "default-src 'self'; " +
+  "script-src 'self'; " +
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+  "font-src https://fonts.gstatic.com; " +
+  "img-src 'self' data:";
+
+app.use((req, res, next) => {
+  res.set("Content-Security-Policy", CSP);
+  next();
+});
+
+// Never let a browser cache an API response. Without this, pressing Back
+// after logging out re-rendered a role page from cache: the HTML and the
+// /api/auth/me response both came from the disk cache, so guardPage() in
+// public/js/common.js saw a stale 200 with the old user still in it and
+// left the page sitting there half-working (see bugs/Closed/BUG-007).
+// With no-store the Back navigation re-requests /api/auth/me, gets a real
+// 401, and guardPage() redirects to login as it already knows how to.
+//
+// Must come above the route mounts so it applies to every /api/* response.
+app.use("/api", (req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
+
 // API routes
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);

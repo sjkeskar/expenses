@@ -22,15 +22,9 @@ class Combobox {
 
   // Types `query`, then clicks the suggestion labelled `label` (defaults to
   // the query itself). Fails if that suggestion never appears.
-  //
-  // Retried because of BUG-009: a blur timer left over from the previous
-  // time this field lost focus (<150ms ago) can hide the freshly opened
-  // dropdown. Re-filling re-opens it.
   async pick(query, label = query) {
-    await expect(async () => {
-      await this.input.fill(query);
-      await this.item(label).click({ timeout: 1000 });
-    }).toPass({ timeout: 10_000 });
+    await this.input.fill(query);
+    await this.item(label).click();
     await expect(this.hidden).not.toHaveValue("");
   }
 

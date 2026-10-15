@@ -1,6 +1,6 @@
 // A10, A12, C9: session lifetime, server restarts, and what happens to a
 // live session when the account behind it changes.
-const { test, expect, knownBug } = require("../../fixtures");
+const { test, expect } = require("../../fixtures");
 const { startServer } = require("../../helpers/server");
 const { createUser } = require("../../helpers/db");
 
@@ -52,7 +52,6 @@ test.describe("Session lifetime (dedicated short-session server)", () => {
 
 test.describe("Live sessions after account changes", () => {
   test("C9a: a deactivated user's existing session stops working", async ({ api, users }) => {
-    knownBug("BUG-003");
     const victim = await createUser("operator");
     const session = await api(victim);
     expect((await session.raw("GET", "/bills")).status).toBe(200);
@@ -64,7 +63,6 @@ test.describe("Live sessions after account changes", () => {
   });
 
   test("C9b: a demoted admin loses admin rights in their existing session", async ({ api, users }) => {
-    knownBug("BUG-003");
     const admin = await createUser("admin");
     const session = await api(admin);
     expect((await session.raw("GET", "/users/reassign-targets")).status).toBe(200);

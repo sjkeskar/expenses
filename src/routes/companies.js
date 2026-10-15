@@ -2,8 +2,14 @@ const express = require("express");
 const prisma = require("../config/prisma");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { VALID_MODES } = require("../utils/paymentModes");
+const { toPaise, fromPaise } = require("../utils/money");
 
 const router = express.Router();
+
+// Settlement locks rows and so needs more than Prisma's 5s default
+// transaction timeout — that budget now has to absorb lock waits as well
+// as the work itself.
+const TX_TIMEOUT_MS = 10_000;
 
 // GET /api/companies — operator + admin. Active companies only.
 // Companies are never created/deleted through a standalone screen — they
@@ -42,11 +48,14 @@ router.get("/:id/outstanding", requireAuth, requireRole("operator", "admin"), as
     orderBy: { createdAt: "asc" },
   });
 
-  const totalOutstanding = pendingBills.reduce((sum, b) => sum + Number(b.balance), 0);
+  // Summed in integer paise, then converted back once — adding Decimals
+  // as floats drifts once there are enough fractional balances in the
+  // list (see src/utils/money.js).
+  const outstandingPaise = pendingBills.reduce((sum, b) => sum + toPaise(b.balance), 0);
 
   res.json({
     company: { id: company.id, name: company.name },
-    totalOutstanding,
+    totalOutstanding: Number(fromPaise(outstandingPaise)),
     pendingBillCount: pendingBills.length,
     pendingBills,
   });
@@ -76,12 +85,35 @@ router.post("/:id/settle", requireAuth, requireRole("operator", "admin"), async 
   if (!VALID_MODES.includes(mode)) {
     return res.status(400).json({ error: `mode must be one of: ${VALID_MODES.join(", ")}` });
   }
+  // A repeated bill id is rejected rather than silently de-duplicated: a
+  // client that sent the same bill twice has a bug of its own, and
+  // quietly settling the unique set hides it. This check also used to
+  // surface as a baffling "one or more selected bills could not be
+  // found", because the findMany below returns one row for two ids and
+  // the length comparison then failed (see bugs/Closed/BUG-005).
+  if (new Set(billIds).size !== billIds.length) {
+    return res.status(400).json({ error: "Each bill can only be selected once." });
+  }
 
   try {
     const result = await prisma.$transaction(async (tx) => {
       const company = await tx.company.findUnique({ where: { id: req.params.id } });
       if (!company) {
         throw { status: 404, message: "Company not found." };
+      }
+
+      // Lock every selected bill BEFORE reading any of them, one id at a
+      // time and in sorted order.
+      //
+      // One id at a time, because a single `WHERE id IN (...) ORDER BY id
+      // FOR UPDATE` does not reliably lock in that order — Postgres may
+      // apply the sort after fetching and locking the rows. In sorted
+      // order, because a deterministic lock order across concurrent
+      // settlements is what stops two overlapping ones deadlocking each
+      // other. And before reading, so the status/balance checks below see
+      // whatever a competing payment committed while we waited.
+      for (const id of [...billIds].sort()) {
+        await tx.$queryRaw`SELECT 1 FROM "bills" WHERE "id" = ${id} FOR UPDATE`;
       }
 
       const bills = await tx.bill.findMany({ where: { id: { in: billIds } } });
@@ -98,16 +130,16 @@ router.post("/:id/settle", requireAuth, requireRole("operator", "admin"), async 
       }
 
       const breakdown = [];
-      let totalSettled = 0;
+      let totalSettledPaise = 0;
 
       for (const bill of bills) {
-        const applied = Number(bill.balance);
+        const appliedPaise = toPaise(bill.balance);
 
         await tx.transaction.create({
           data: {
             billId: bill.id,
             clientId: bill.clientId,
-            amountCollected: applied,
+            amountCollected: fromPaise(appliedPaise),
             mode,
             operatorId: userId,
             createdById: userId,
@@ -122,19 +154,19 @@ router.post("/:id/settle", requireAuth, requireRole("operator", "admin"), async 
         breakdown.push({
           billId: bill.id,
           billNumber: bill.billNumber,
-          amountApplied: applied,
+          amountApplied: Number(fromPaise(appliedPaise)),
           newBalance: 0,
           newStatus: "fully_paid",
         });
-        totalSettled += applied;
+        totalSettledPaise += appliedPaise;
       }
 
       return {
         company: { id: company.id, name: company.name },
-        totalSettled,
+        totalSettled: Number(fromPaise(totalSettledPaise)),
         breakdown,
       };
-    });
+    }, { timeout: TX_TIMEOUT_MS });
 
     res.status(201).json(result);
   } catch (err) {

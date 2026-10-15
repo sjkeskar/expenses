@@ -19,6 +19,7 @@ let selectedCategory = null;
 let settleBills = [];
 let reassignTargets = [];
 let pendingRefundBillId = null;
+let refundDialog = null; // { open, close } from setupModal — see common.js
 
 // Once a bill is refunded, balance is force-zeroed by the refund itself
 // (not reached through normal payment), so "netAmount - balance" stops
@@ -233,9 +234,9 @@ async function loadSettleBillsList(companyId) {
       .map(
         (b) => `
         <tr>
-          <td><input type="checkbox" class="settle-bill-checkbox" data-id="${b.id}" data-balance="${b.balance}" /></td>
-          <td>${b.billNumber}</td>
-          <td>${b.client.name}</td>
+          <td><input type="checkbox" class="settle-bill-checkbox" data-id="${escapeHtml(b.id)}" data-balance="${escapeHtml(b.balance)}" aria-label="Settle bill ${escapeHtml(b.billNumber)} — ${escapeHtml(b.client.name)}" /></td>
+          <td>${escapeHtml(b.billNumber)}</td>
+          <td>${escapeHtml(b.client.name)}</td>
           <td>${formatCurrency(b.balance)}</td>
           <td>${formatDateTime(b.createdAt)}</td>
         </tr>`
@@ -339,7 +340,7 @@ async function loadCompanies() {
   newCategoryCompanyCombobox.updateItems(companies);
 }
 
-function openRefundModal(bill) {
+function openRefundModal(bill, opener) {
   pendingRefundBillId = bill.id;
   const collected = getCollectedAmount(bill);
   document.getElementById("refund-modal-details").textContent =
@@ -347,17 +348,24 @@ function openRefundModal(bill) {
   const msg = document.getElementById("refund-modal-msg");
   msg.textContent = "";
   msg.className = "msg";
-  document.getElementById("refund-modal").style.display = "flex";
+  refundDialog.open(opener);
 }
 
 function closeRefundModal() {
-  document.getElementById("refund-modal").style.display = "none";
-  pendingRefundBillId = null;
+  // setupModal's onClose clears pendingRefundBillId and restores focus.
+  refundDialog.close();
 }
 
 function setupRefundModal() {
+  const modal = document.getElementById("refund-modal");
+  refundDialog = setupModal(modal, {
+    onClose: () => {
+      pendingRefundBillId = null;
+    },
+  });
+
   document.getElementById("refund-modal-cancel").addEventListener("click", closeRefundModal);
-  document.getElementById("refund-modal").addEventListener("click", (e) => {
+  modal.addEventListener("click", (e) => {
     if (e.target.id === "refund-modal") closeRefundModal();
   });
   document.getElementById("refund-modal-confirm").addEventListener("click", async () => {
@@ -406,20 +414,20 @@ async function loadBills() {
       const collected = getCollectedAmount(b);
       const canRefund = b.status !== "refunded" && collected > 0;
       const actionsCell = canRefund
-        ? `<button class="danger refund-btn" data-id="${b.id}">Refund</button>`
+        ? `<button class="danger refund-btn" data-id="${escapeHtml(b.id)}">Refund</button>`
         : "—";
       return `
       <tr>
-        <td>${b.billNumber}</td>
-        <td>${b.client.name}</td>
-        <td>${b.category ? b.category.name : "—"}</td>
-        <td>${b.company ? b.company.name : "—"}</td>
-        <td>${b.location ? b.location.name : "—"}</td>
+        <td>${escapeHtml(b.billNumber)}</td>
+        <td>${escapeHtml(b.client.name)}</td>
+        <td>${b.category ? escapeHtml(b.category.name) : "—"}</td>
+        <td>${b.company ? escapeHtml(b.company.name) : "—"}</td>
+        <td>${b.location ? escapeHtml(b.location.name) : "—"}</td>
         <td>${formatCurrency(b.netAmount)}</td>
         <td>${formatCurrency(collected)}</td>
         <td>${formatCurrency(b.discountAmount)}</td>
         <td>${formatCurrency(b.balance)}</td>
-        <td><span class="badge ${b.status}">${statusLabel(b.status)}</span></td>
+        <td><span class="badge ${escapeHtml(b.status)}">${statusLabel(b.status)}</span></td>
         <td>${formatDateTime(b.createdAt)}</td>
         <td>${actionsCell}</td>
       </tr>`;
@@ -443,7 +451,7 @@ async function loadBills() {
   tbody.querySelectorAll(".refund-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const bill = myBillsCache.find((b) => b.id === btn.dataset.id);
-      if (bill) openRefundModal(bill);
+      if (bill) openRefundModal(bill, btn);
     });
   });
 
@@ -458,128 +466,135 @@ async function loadBills() {
 
 document.getElementById("bill-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const msg = document.getElementById("bill-msg");
+  await submitOnce(submitButtonFor(e), async () => {
+    const msg = document.getElementById("bill-msg");
 
-  const clientInput = document.getElementById("bill-client-input");
-  const clientId = document.getElementById("bill-client-id").value;
-  const locationId = document.getElementById("bill-location-id").value;
-  const categoryId = document.getElementById("bill-category-id").value;
-  const billDate = document.getElementById("bill-date").value;
-  const originalAmount = document.getElementById("original-amount").value;
-  const discountAmount = document.getElementById("discount-amount").value;
-  const initialAmount = document.getElementById("initial-amount").value;
-  const initialMode = document.getElementById("initial-mode").value;
+    const clientInput = document.getElementById("bill-client-input");
+    const clientId = document.getElementById("bill-client-id").value;
+    const locationId = document.getElementById("bill-location-id").value;
+    const categoryId = document.getElementById("bill-category-id").value;
+    const billDate = document.getElementById("bill-date").value;
+    const originalAmount = document.getElementById("original-amount").value;
+    const discountAmount = document.getElementById("discount-amount").value;
+    const initialAmount = document.getElementById("initial-amount").value;
+    const initialMode = document.getElementById("initial-mode").value;
 
-  if (!clientInput.value.trim()) {
-    showMessage(msg, "Enter a client name.", true);
-    return;
-  }
-  if (!billDate) {
-    showMessage(msg, "Select a bill date.", true);
-    return;
-  }
-  if (!locationId) {
-    showMessage(msg, "Select a valid location from the suggestions list.", true);
-    return;
-  }
-  if (!categoryId) {
-    showMessage(msg, "Select a valid category from the suggestions list.", true);
-    return;
-  }
+    if (!clientInput.value.trim()) {
+      showMessage(msg, "Enter a client name.", true);
+      return;
+    }
+    if (!billDate) {
+      showMessage(msg, "Select a bill date.", true);
+      return;
+    }
+    if (!locationId) {
+      showMessage(msg, "Select a valid location from the suggestions list.", true);
+      return;
+    }
+    if (!categoryId) {
+      showMessage(msg, "Select a valid category from the suggestions list.", true);
+      return;
+    }
 
-  const body = { originalAmount, discountAmount, billDate, locationId, categoryId };
-  if (clientId) {
-    body.clientId = clientId;
-  } else {
-    body.clientName = clientInput.value.trim();
-  }
-  if (Number(initialAmount) > 0) {
-    body.initialAmountCollected = initialAmount;
-    body.initialMode = initialMode;
-  }
+    const body = { originalAmount, discountAmount, billDate, locationId, categoryId };
+    if (clientId) {
+      body.clientId = clientId;
+    } else {
+      body.clientName = clientInput.value.trim();
+    }
+    if (Number(initialAmount) > 0) {
+      body.initialAmountCollected = initialAmount;
+      body.initialMode = initialMode;
+    }
 
-  try {
-    const { bill } = await api("/bills", { method: "POST", body });
-    const companyNote = bill.company ? ` (billed to ${bill.company.name})` : "";
-    showMessage(
-      msg,
-      `Bill ${bill.billNumber} created for ${bill.client.name} — ${bill.category.name}${companyNote} — balance ${formatCurrency(bill.balance)}.`,
-      false
-    );
-    clientCombobox.clear();
-    locationCombobox.clear();
-    categoryCombobox.clear();
-    applyCategorySelection(null);
-    document.getElementById("bill-date").value = getTodayIstDateString();
-    document.getElementById("original-amount").value = "";
-    document.getElementById("discount-amount").value = "0";
-    document.getElementById("initial-amount").value = "0";
-    await loadClients();
-    await loadBills();
-  } catch (err) {
-    showMessage(msg, err.message, true);
-  }
+    try {
+      const { bill } = await api("/bills", { method: "POST", body });
+      const companyNote = bill.company ? ` (billed to ${bill.company.name})` : "";
+      showMessage(
+        msg,
+        `Bill ${bill.billNumber} created for ${bill.client.name} — ${bill.category.name}${companyNote} — balance ${formatCurrency(bill.balance)}.`,
+        false
+      );
+      clientCombobox.clear();
+      locationCombobox.clear();
+      categoryCombobox.clear();
+      applyCategorySelection(null);
+      document.getElementById("bill-date").value = getTodayIstDateString();
+      document.getElementById("original-amount").value = "";
+      document.getElementById("discount-amount").value = "0";
+      document.getElementById("initial-amount").value = "0";
+      await loadClients();
+      await loadBills();
+    } catch (err) {
+      showMessage(msg, err.message, true);
+    }
+  });
 });
 
 document.getElementById("transaction-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const msg = document.getElementById("tx-msg");
-  const billId = document.getElementById("tx-bill-id").value;
-  const amountCollected = document.getElementById("tx-amount").value;
-  const discountAmount = document.getElementById("tx-discount").value;
-  const mode = document.getElementById("tx-mode").value;
+  await submitOnce(submitButtonFor(e), async () => {
+    const msg = document.getElementById("tx-msg");
+    const billId = document.getElementById("tx-bill-id").value;
+    const amountCollected = document.getElementById("tx-amount").value;
+    const discountAmount = document.getElementById("tx-discount").value;
+    const mode = document.getElementById("tx-mode").value;
 
-  if (!billId) {
-    showMessage(msg, "Select a valid pending bill from the suggestions list.", true);
-    return;
-  }
+    if (!billId) {
+      showMessage(msg, "Select a valid pending bill from the suggestions list.", true);
+      return;
+    }
 
-  try {
-    await api("/transactions", { method: "POST", body: { billId, amountCollected, discountAmount, mode } });
-    showMessage(
-      msg,
-      Number(discountAmount) > 0
-        ? `Payment recorded — ${formatCurrency(amountCollected)} collected plus ${formatCurrency(discountAmount)} discount applied.`
-        : "Payment recorded.",
-      false
-    );
-    billCombobox.clear();
-    document.getElementById("tx-amount").value = "";
-    document.getElementById("tx-discount").value = "0";
-    await loadBills();
-  } catch (err) {
-    showMessage(msg, err.message, true);
-  }
+    try {
+      await api("/transactions", { method: "POST", body: { billId, amountCollected, discountAmount, mode } });
+      showMessage(
+        msg,
+        Number(discountAmount) > 0
+          ? `Payment recorded — ${formatCurrency(amountCollected)} collected plus ${formatCurrency(discountAmount)} discount applied.`
+          : "Payment recorded.",
+        false
+      );
+      billCombobox.clear();
+      document.getElementById("tx-amount").value = "";
+      document.getElementById("tx-discount").value = "0";
+      await loadBills();
+    } catch (err) {
+      showMessage(msg, err.message, true);
+    }
+  });
 });
 
-document.getElementById("settle-submit-btn").addEventListener("click", async () => {
-  const msg = document.getElementById("settle-msg");
-  const companyId = document.getElementById("settle-company-id").value;
-  const mode = document.getElementById("settle-mode").value;
-  const checked = Array.from(document.querySelectorAll(".settle-bill-checkbox:checked"));
+const settleSubmitBtn = document.getElementById("settle-submit-btn");
+settleSubmitBtn.addEventListener("click", async () => {
+  await submitOnce(settleSubmitBtn, async () => {
+    const msg = document.getElementById("settle-msg");
+    const companyId = document.getElementById("settle-company-id").value;
+    const mode = document.getElementById("settle-mode").value;
+    const checked = Array.from(document.querySelectorAll(".settle-bill-checkbox:checked"));
 
-  if (!companyId) {
-    showMessage(msg, "Select a valid company from the suggestions list.", true);
-    return;
-  }
-  if (checked.length === 0) {
-    showMessage(msg, "Check at least one bill to settle.", true);
-    return;
-  }
+    if (!companyId) {
+      showMessage(msg, "Select a valid company from the suggestions list.", true);
+      return;
+    }
+    if (checked.length === 0) {
+      showMessage(msg, "Check at least one bill to settle.", true);
+      return;
+    }
 
-  const billIds = checked.map((cb) => cb.dataset.id);
+    const billIds = checked.map((cb) => cb.dataset.id);
 
-  try {
-    const result = await api(`/companies/${companyId}/settle`, { method: "POST", body: { billIds, mode } });
-    const breakdown = result.breakdown.map((b) => `${b.billNumber}: ${formatCurrency(b.amountApplied)}`).join("; ");
-    showMessage(msg, `Settled ${formatCurrency(result.totalSettled)} for ${result.company.name}. ${breakdown}`, false);
-    settleCompanyCombobox.clear();
-    document.getElementById("settle-bills-container").style.display = "none";
-    settleBills = [];
-    await loadBills();
-  } catch (err) {
-    showMessage(msg, err.message, true);
-  }
+    try {
+      const result = await api(`/companies/${companyId}/settle`, { method: "POST", body: { billIds, mode } });
+      const breakdown = result.breakdown.map((b) => `${b.billNumber}: ${formatCurrency(b.amountApplied)}`).join("; ");
+      showMessage(msg, `Settled ${formatCurrency(result.totalSettled)} for ${result.company.name}. ${breakdown}`, false);
+      settleCompanyCombobox.clear();
+      document.getElementById("settle-bills-container").style.display = "none";
+      settleBills = [];
+      await loadBills();
+    } catch (err) {
+      showMessage(msg, err.message, true);
+    }
+  });
 });
 
 document.getElementById("download-my-bills-pdf").addEventListener("click", () => {
@@ -666,7 +681,7 @@ async function loadAnalytics() {
     .map(
       (r) => `
       <tr>
-        <td>${r.operatorName}</td>
+        <td>${escapeHtml(r.operatorName)}</td>
         <td>${formatCurrency(r.totalBilled || 0)}</td>
         <td>${formatCurrency(r.totalDiscount || 0)}</td>
         <td>${formatCurrency(r.totalCollected || 0)}</td>
@@ -681,7 +696,7 @@ async function loadAnalytics() {
     .map(
       (r) => `
       <tr>
-        <td>${r.location_name}</td>
+        <td>${escapeHtml(r.location_name)}</td>
         <td>${formatCurrency(r.total_billed || 0)}</td>
         <td>${formatCurrency(r.total_discount || 0)}</td>
         <td>${formatCurrency(r.total_pending || 0)}</td>
@@ -694,8 +709,8 @@ async function loadAnalytics() {
     .map(
       (r) => `
       <tr>
-        <td>${r.category_name}</td>
-        <td>${r.category_type || "—"}</td>
+        <td>${escapeHtml(r.category_name)}</td>
+        <td>${r.category_type ? escapeHtml(r.category_type) : "—"}</td>
         <td>${r.bill_count || 0}</td>
         <td>${formatCurrency(r.total_billed || 0)}</td>
         <td>${formatCurrency(r.total_discount || 0)}</td>
@@ -707,7 +722,7 @@ async function loadAnalytics() {
   document.querySelector("#client-outstanding-table tbody").innerHTML = clientOutstanding.clientOutstanding
     .map(
       (r) =>
-        `<tr><td>${r.client_name}</td><td>${formatCurrency(r.outstanding_balance)}</td><td>${r.pending_bill_count}</td></tr>`
+        `<tr><td>${escapeHtml(r.client_name)}</td><td>${formatCurrency(r.outstanding_balance)}</td><td>${r.pending_bill_count}</td></tr>`
     )
     .join("");
 
@@ -740,13 +755,13 @@ async function loadClientDetail() {
   document.querySelector("#client-ledger-table tbody").innerHTML = ledger.ledger
     .map((b) => {
       const payments = b.transactions
-        .map((t) => `${formatCurrency(t.amountCollected)}${Number(t.discountAmount) > 0 ? ` + ${formatCurrency(t.discountAmount)} discount` : ""} (${t.mode}, ${t.operator.name})`)
+        .map((t) => `${formatCurrency(t.amountCollected)}${Number(t.discountAmount) > 0 ? ` + ${formatCurrency(t.discountAmount)} discount` : ""} (${escapeHtml(t.mode)}, ${escapeHtml(t.operator.name)})`)
         .join("; ") || "—";
       return `<tr>
-        <td>${b.billNumber}</td>
+        <td>${escapeHtml(b.billNumber)}</td>
         <td>${formatCurrency(b.netAmount)}</td>
         <td>${formatCurrency(b.balance)}</td>
-        <td><span class="badge ${b.status}">${statusLabel(b.status)}</span></td>
+        <td><span class="badge ${escapeHtml(b.status)}">${statusLabel(b.status)}</span></td>
         <td>${payments}</td>
       </tr>`;
     })
@@ -758,7 +773,9 @@ async function loadClientDetail() {
 async function loadOperators() {
   const { operators } = await api("/users/operators");
   const select = document.getElementById("promote-user");
-  select.innerHTML = operators.map((o) => `<option value="${o.id}">${o.name}</option>`).join("");
+  select.innerHTML = operators
+    .map((o) => `<option value="${escapeHtml(o.id)}">${escapeHtml(o.name)}</option>`)
+    .join("");
 }
 
 document.getElementById("promote-form").addEventListener("submit", async (e) => {
@@ -785,7 +802,7 @@ async function loadReassignData() {
   reassignTargets = targets;
   const select = document.getElementById("reassign-target");
   select.innerHTML = targets
-    .map((t) => `<option value="${t.id}">${t.name} (${t.role})</option>`)
+    .map((t) => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)} (${escapeHtml(t.role)})</option>`)
     .join("");
 
   renderReassignHistory(null);
@@ -826,9 +843,9 @@ function renderReassignHistory(bill) {
       (r) => `
       <tr>
         <td>${formatDateTime(r.reassignedAt)}</td>
-        <td>${r.fromOperator ? r.fromOperator.name : "Unattributed (legacy bill)"}</td>
-        <td>${r.toOperator.name}</td>
-        <td>${r.reassignedBy.name}</td>
+        <td>${r.fromOperator ? escapeHtml(r.fromOperator.name) : "Unattributed (legacy bill)"}</td>
+        <td>${escapeHtml(r.toOperator.name)}</td>
+        <td>${escapeHtml(r.reassignedBy.name)}</td>
       </tr>`
     )
     .join("");
@@ -873,10 +890,10 @@ async function loadLocationsTable() {
     .map(
       (l) => `
       <tr>
-        <td>${l.name}</td>
-        <td>${l.locationCode}</td>
+        <td>${escapeHtml(l.name)}</td>
+        <td>${escapeHtml(l.locationCode)}</td>
         <td>${formatDateTime(l.createdAt)}</td>
-        <td><button class="danger" data-id="${l.id}">Delete</button></td>
+        <td><button class="danger" data-id="${escapeHtml(l.id)}">Delete</button></td>
       </tr>`
     )
     .join("");
@@ -930,11 +947,11 @@ async function loadCategoriesTable() {
     .map(
       (c) => `
       <tr>
-        <td>${c.name}</td>
-        <td>${c.type}</td>
-        <td>${c.company ? c.company.name : "—"}</td>
+        <td>${escapeHtml(c.name)}</td>
+        <td>${escapeHtml(c.type)}</td>
+        <td>${c.company ? escapeHtml(c.company.name) : "—"}</td>
         <td>${formatDateTime(c.createdAt)}</td>
-        <td><button class="danger" data-id="${c.id}">Delete</button></td>
+        <td><button class="danger" data-id="${escapeHtml(c.id)}">Delete</button></td>
       </tr>`
     )
     .join("");

@@ -9,7 +9,10 @@
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
-  <div class="login-wrapper">
+  <!-- <main>, not a <div>: the page's whole content must sit inside a
+       landmark so a screen-reader user can jump to it (see
+       bugs/Open/BUG-017). .login-wrapper styling is unaffected. -->
+  <main class="login-wrapper">
     <div class="login-box">
       <h1>Payment Tracking System</h1>
       <form id="login-form">
@@ -19,7 +22,7 @@
       </form>
       <div id="msg" class="msg"></div>
     </div>
-  </div>
+  </main>
 
   <script src="js/common.js"></script>
   <script src="js/login.js"></script>

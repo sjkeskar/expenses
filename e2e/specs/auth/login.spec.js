@@ -1,5 +1,5 @@
 // A1–A9: login, logout, redirects and role-page guards.
-const { test, expect, knownBug } = require("../../fixtures");
+const { test, expect } = require("../../fixtures");
 const { LoginPage } = require("../../pages/login");
 const { db, createUser } = require("../../helpers/db");
 
@@ -116,7 +116,6 @@ test.describe("Logout", () => {
     });
 
     test(`A8b: ${role} pressing Back after logout is sent to the login page`, async ({ loginAs, users }) => {
-      knownBug("BUG-007");
       const page = await loginAs(users[ROLE_USER[role]]);
       await page.locator("#logout-btn").click();
       await expect(page).toHaveURL(/login\.html$/);

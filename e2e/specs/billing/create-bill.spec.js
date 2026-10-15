@@ -1,6 +1,6 @@
 // D1–D21: the Create Bill form, run identically on operator.html and on
 // admin.html's Billing tab (H12 — admin has the same billing powers).
-const { test, expect, knownBug } = require("../../fixtures");
+const { test, expect } = require("../../fixtures");
 const { BillingPage } = require("../../pages/billing");
 const { BASELINE } = require("../../helpers/seed");
 const { createUser, db, findBillByNumber } = require("../../helpers/db");
@@ -261,7 +261,6 @@ for (const role of ["operator", "admin"]) {
     });
 
     test("D21b: collecting exactly the net amount on a fractional bill is accepted", async () => {
-      knownBug("BUG-008");
       // net = 0.30 - 0.10 = 0.20, computed in floating point as 0.19999999999999998
       const msg = await ui.createBill({
         client: uid("Float"), newClient: true, category: STD, location: LOC, original: 0.3, discount: 0.1, initial: 0.2,

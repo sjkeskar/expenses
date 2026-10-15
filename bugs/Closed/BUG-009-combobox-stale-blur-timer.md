@@ -2,14 +2,14 @@
 
 | Field | Value |
 |---|---|
-| Status | Open |
+| Status | Closed |
 | Severity | Low |
 | Area | Shared UI (`public/js/common.js`, `attachCombobox`) |
 | Reported | 2026-10-15 |
 | Found by | E2E flakiness investigation (create-bill D2) |
 | Assignee | — |
-| Resolution | — |
-| Verified by | — |
+| Resolution | Batch 4 of `bugs/FIX-PLAN.md` — `attachCombobox()` in `public/js/common.js` stores the blur timer, cancels it on focus/input, re-checks focus before hiding, and hides immediately on Tab |
+| Verified by | new `accessibility/keyboard.spec.js` › M3j; the retry in `Combobox.pick()` and the `toPass` in admin-tabs H5 were removed and the suite stayed green in three full `npm run test:e2e` runs (4 and 8 workers) on 2026-10-16 |
 
 ## Summary
 

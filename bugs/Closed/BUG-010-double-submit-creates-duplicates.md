@@ -2,14 +2,14 @@
 
 | Field | Value |
 |---|---|
-| Status | Open |
+| Status | Closed |
 | Severity | Medium |
 | Area | Operator / Admin UI (`public/js/operator.js`, `public/js/admin.js`) |
 | Reported | 2026-10-15 |
 | Found by | E2E `robustness/security-inputs.spec.js` › K4a, K4b |
 | Assignee | — |
-| Resolution | — |
-| Verified by | — |
+| Resolution | Batch 6 of `bugs/FIX-PLAN.md` — `submitOnce()` in `public/js/common.js` disables the submit button for the duration of each Create Bill / Record Payment / Settle request (operator.js and admin.js) |
+| Verified by | `robustness/security-inputs.spec.js` › K4a, K4b and the new K4c (Settle) and K4d (button disabled in flight, re-enabled after an error), green in three full `npm run test:e2e` runs (4 and 8 workers) on 2026-10-16 |
 
 ## Summary
 

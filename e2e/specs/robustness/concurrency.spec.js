@@ -1,7 +1,7 @@
 // L2–L5: several users acting on the same bill at the same moment (the shop
 // runs 6+ operators concurrently). Each scenario is tried on several bills at
 // once so a race has a real chance to show up.
-const { test, expect, knownBug } = require("../../fixtures");
+const { test, expect } = require("../../fixtures");
 const { createUser, db } = require("../../helpers/db");
 const { ApiClient } = require("../../helpers/api");
 
@@ -28,7 +28,6 @@ test.describe("Concurrent writes on one bill", () => {
   });
 
   test("L2: two simultaneous payments can never collect more than the bill's net amount", async ({ adminApi }) => {
-    knownBug("BUG-011");
     const bills = await Promise.all(Array.from({ length: TRIALS }, () => adminApi.createBill({ originalAmount: 100 })));
     await Promise.all(bills.flatMap((b) => ops.map((s) => s.raw("POST", "/transactions", { billId: b.id, amountCollected: 60, mode: "cash" }))));
 
@@ -62,7 +61,6 @@ test.describe("Concurrent writes on one bill", () => {
   });
 
   test("L5: a company settlement racing a payment cannot overpay a bill", async ({ adminApi }) => {
-    knownBug("BUG-011");
     const { company, category } = await adminApi.addCreditCategory();
     const bills = await Promise.all(
       Array.from({ length: TRIALS }, () => adminApi.createBill({ categoryId: category.id, originalAmount: 100 }))
@@ -78,7 +76,6 @@ test.describe("Concurrent writes on one bill", () => {
   });
 
   test("L6: two admins reassigning the same bill keep history and current owner in sync", async ({ api }) => {
-    knownBug("BUG-011");
     const [adminA, adminB] = await Promise.all([createUser("admin"), createUser("admin")]);
     const [sa, sb] = await Promise.all([api(adminA), api(adminB)]);
     const owner = await createUser("operator");

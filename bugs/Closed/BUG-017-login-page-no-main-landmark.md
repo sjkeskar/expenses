@@ -2,14 +2,14 @@
 
 | Field | Value |
 |---|---|
-| Status | Open |
+| Status | Closed |
 | Severity | Low |
 | Area | `public/login.html` |
 | Reported | 2026-10-15 |
 | Found by | E2E `accessibility/axe.spec.js` › M2/BUG-017 (axe best-practice rules `landmark-one-main`, `region`) |
 | Assignee | — |
-| Resolution | — |
-| Verified by | — |
+| Resolution | Batch 7 of `bugs/FIX-PLAN.md` — `public/login.html` wrapper is now `<main class="login-wrapper">` (with a style reset in `style.css`) |
+| Verified by | `accessibility/axe.spec.js` › M2/BUG-017, green in three full `npm run test:e2e` runs (4 and 8 workers) on 2026-10-16 |
 
 ## Summary
 

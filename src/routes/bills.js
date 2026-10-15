@@ -3,6 +3,7 @@ const prisma = require("../config/prisma");
 const { requireAuth, requireRole } = require("../middleware/auth");
 const { generateBillNumber } = require("../utils/billNumber");
 const { VALID_MODES } = require("../utils/paymentModes");
+const { toPaise, fromPaise } = require("../utils/money");
 const {
   getIstDateString,
   isValidDateString,
@@ -11,6 +12,12 @@ const {
 } = require("../utils/istDate");
 
 const router = express.Router();
+
+// Every amount below is calculated in integer paise, never in floats —
+// see src/utils/money.js for why. The two handlers that lock a bill row
+// get an explicit timeout rather than Prisma's 5s default, since that
+// budget now has to absorb lock waits as well as the work itself.
+const TX_TIMEOUT_MS = 10_000;
 
 // GET /api/bills — operator + admin.
 router.get("/", requireAuth, requireRole("operator", "admin"), async (req, res) => {
@@ -136,24 +143,34 @@ router.post("/", requireAuth, requireRole("operator", "admin"), async (req, res)
   if (!Number.isFinite(discount) || discount < 0) {
     return res.status(400).json({ error: "discountAmount cannot be negative." });
   }
-  if (discount > original) {
+
+  // Validated as finite numbers above, so the conversion is safe here.
+  // Everything from this point on is integer paise: a bill of 0.30 with a
+  // 0.10 discount has a net of exactly 20 paise, where the old float
+  // subtraction produced 0.19999999999999998 and then rejected a
+  // perfectly valid 0.20 payment against it.
+  const originalPaise = toPaise(original);
+  const discountPaise = toPaise(discount);
+
+  if (discountPaise > originalPaise) {
     return res.status(400).json({ error: "discountAmount cannot exceed originalAmount." });
   }
 
-  const netAmount = original - discount;
+  const netAmountPaise = originalPaise - discountPaise;
 
-  let initialAmount = 0;
+  let initialAmountPaise = 0;
   const wantsInitialPayment =
     initialAmountCollected !== undefined && initialAmountCollected !== null && initialAmountCollected !== "";
   if (wantsInitialPayment) {
-    initialAmount = Number(initialAmountCollected);
+    const initialAmount = Number(initialAmountCollected);
     if (!Number.isFinite(initialAmount) || initialAmount < 0) {
       return res.status(400).json({ error: "initialAmountCollected cannot be negative." });
     }
-    if (initialAmount > netAmount) {
+    initialAmountPaise = toPaise(initialAmount);
+    if (initialAmountPaise > netAmountPaise) {
       return res.status(400).json({ error: "Amount collected now cannot exceed the bill's net amount." });
     }
-    if (initialAmount > 0 && !VALID_MODES.includes(initialMode)) {
+    if (initialAmountPaise > 0 && !VALID_MODES.includes(initialMode)) {
       return res.status(400).json({ error: `mode must be one of: ${VALID_MODES.join(", ")}` });
     }
   }
@@ -207,17 +224,17 @@ router.post("/", requireAuth, requireRole("operator", "admin"), async (req, res)
       const counterKey = buildBillCounterKey(location.locationCode, resolvedBillDate);
       const billNumber = await generateBillNumber(tx, counterKey);
       const billTimestamp = combineDateWithCurrentIstTime(resolvedBillDate);
-      const balance = netAmount - initialAmount;
+      const balancePaise = netAmountPaise - initialAmountPaise;
 
       const bill = await tx.bill.create({
         data: {
           billNumber,
           clientId: client.id,
-          originalAmount: original,
-          discountAmount: discount,
-          netAmount,
-          balance,
-          status: balance <= 0 ? "fully_paid" : "pending",
+          originalAmount: fromPaise(originalPaise),
+          discountAmount: fromPaise(discountPaise),
+          netAmount: fromPaise(netAmountPaise),
+          balance: fromPaise(balancePaise),
+          status: balancePaise <= 0 ? "fully_paid" : "pending",
           createdById: userId,
           createdAt: billTimestamp,
           locationId: location.id,
@@ -233,12 +250,12 @@ router.post("/", requireAuth, requireRole("operator", "admin"), async (req, res)
       });
 
       let transaction = null;
-      if (initialAmount > 0) {
+      if (initialAmountPaise > 0) {
         transaction = await tx.transaction.create({
           data: {
             billId: bill.id,
             clientId: client.id,
-            amountCollected: initialAmount,
+            amountCollected: fromPaise(initialAmountPaise),
             mode: initialMode,
             operatorId: userId,
             createdById: userId,
@@ -272,6 +289,11 @@ router.patch("/:id/refund", requireAuth, requireRole("operator", "admin"), async
   const userId = req.session.user.id;
   try {
     const result = await prisma.$transaction(async (tx) => {
+      // Lock the bill row BEFORE reading it, so a payment committed while
+      // we waited is included in the collected total this refund
+      // snapshots — reading first would refund a stale amount and leave
+      // refundedAmount disagreeing with the bill's own ledger.
+      await tx.$queryRaw`SELECT 1 FROM "bills" WHERE "id" = ${req.params.id} FOR UPDATE`;
       const bill = await tx.bill.findUnique({ where: { id: req.params.id } });
       if (!bill) {
         throw { status: 404, message: "Bill not found." };
@@ -279,8 +301,8 @@ router.patch("/:id/refund", requireAuth, requireRole("operator", "admin"), async
       if (bill.status === "refunded") {
         throw { status: 400, message: "This bill has already been refunded." };
       }
-      const collected = Number(bill.netAmount) - Number(bill.balance);
-      if (collected <= 0) {
+      const collectedPaise = toPaise(bill.netAmount) - toPaise(bill.balance);
+      if (collectedPaise <= 0) {
         throw { status: 400, message: "This bill has no collected amount to refund." };
       }
 
@@ -289,7 +311,7 @@ router.patch("/:id/refund", requireAuth, requireRole("operator", "admin"), async
         data: {
           status: "refunded",
           balance: 0,
-          refundedAmount: collected,
+          refundedAmount: fromPaise(collectedPaise),
           refundedAt: new Date(),
           refundedById: userId,
         },
@@ -304,7 +326,7 @@ router.patch("/:id/refund", requireAuth, requireRole("operator", "admin"), async
       });
 
       return updated;
-    });
+    }, { timeout: TX_TIMEOUT_MS });
 
     res.json({ bill: result });
   } catch (err) {
@@ -340,6 +362,12 @@ router.patch("/:id/reassign-operator", requireAuth, requireRole("admin"), async 
 
   try {
     const result = await prisma.$transaction(async (tx) => {
+      // Lock the bill row BEFORE reading it. This is what serialises two
+      // admins moving the same bill at the same moment, and so what keeps
+      // the append-only bill_reassignments chain intact: the second move's
+      // fromOperatorId is the first move's toOperatorId, because the
+      // findUnique below only runs once the first move has committed.
+      await tx.$queryRaw`SELECT 1 FROM "bills" WHERE "id" = ${req.params.id} FOR UPDATE`;
       const bill = await tx.bill.findUnique({ where: { id: req.params.id } });
       if (!bill) {
         throw { status: 404, message: "Bill not found." };
@@ -387,7 +415,7 @@ router.patch("/:id/reassign-operator", requireAuth, requireRole("admin"), async 
       });
 
       return updated;
-    });
+    }, { timeout: TX_TIMEOUT_MS });
 
     res.json({ bill: result });
   } catch (err) {

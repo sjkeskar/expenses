@@ -2,14 +2,14 @@
 
 | Field | Value |
 |---|---|
-| Status | Open |
+| Status | Closed |
 | Severity | Medium |
 | Area | Shared UI (`public/js/common.js` `attachCombobox`, `public/css/style.css` `.combobox-list`) |
 | Reported | 2026-10-15 |
 | Found by | E2E `accessibility/keyboard.spec.js` › M3b (it only showed up once the test database held many clients) |
 | Assignee | — |
-| Resolution | — |
-| Verified by | — |
+| Resolution | Batch 4 of `bugs/FIX-PLAN.md` — `attachCombobox()` sets `tabIndex = -1` on the list and hides it immediately on Tab |
+| Verified by | `accessibility/keyboard.spec.js` › M3b, now tabbing at full speed with 25 clients, green in three full `npm run test:e2e` runs (4 and 8 workers) on 2026-10-16 |
 
 ## Summary
 

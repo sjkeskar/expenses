@@ -2,14 +2,14 @@
 
 | Field | Value |
 |---|---|
-| Status | Open |
+| Status | Closed |
 | Severity | Low |
 | Area | Shared styles (`public/css/style.css`) |
 | Reported | 2026-10-15 |
 | Found by | E2E `accessibility/keyboard.spec.js` › M3g |
 | Assignee | — |
-| Resolution | — |
-| Verified by | — |
+| Resolution | Batch 7 of `bugs/FIX-PLAN.md` — the `input:focus, select:focus` rule in `public/css/style.css` is scoped to `:not(:focus-visible)`, so keyboard focus gets the intended 2px ring |
+| Verified by | `accessibility/keyboard.spec.js` › M3g, green in three full `npm run test:e2e` runs (4 and 8 workers) on 2026-10-16 |
 
 ## Summary
 

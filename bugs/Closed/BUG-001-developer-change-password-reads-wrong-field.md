@@ -2,14 +2,14 @@
 
 | Field | Value |
 |---|---|
-| Status | Open |
+| Status | Closed |
 | Severity | Medium |
 | Area | Developer UI (`public/developer.html`, `public/js/common.js`) |
 | Reported | 2026-10-15 |
 | Found by | Code review; confirmed by E2E `auth/change-password.spec.js` › B1, B2 (developer) |
 | Assignee | — |
-| Resolution | — |
-| Verified by | — |
+| Resolution | Batch 5 of `bugs/FIX-PLAN.md` — Create User field renamed to `#create-user-password` (`public/developer.html`, `public/js/developer.js`), and `setupChangePasswordModal()` in `public/js/common.js` now looks its fields up inside the modal |
+| Verified by | `auth/change-password.spec.js` › B1, B2 (developer) and the new B6 (Create User text never leaks into Change Password), green in three full `npm run test:e2e` runs (4 and 8 workers) on 2026-10-16 |
 
 ## Summary
 

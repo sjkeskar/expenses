@@ -148,14 +148,41 @@ test.describe("Settlement edge cases", () => {
   });
 
   test("F12: the same bill id sent twice gets a clear validation error", async ({ adminApi }) => {
-    knownBug("BUG-005");
     const { company, category } = await adminApi.addCreditCategory();
     const bill = await adminApi.createBill({ categoryId: category.id });
     const { status, body } = await adminApi.raw("POST", `/companies/${company.id}/settle`, {
       billIds: [bill.id, bill.id], mode: "cash",
     });
     expect(status).toBe(400);
-    expect(body.error).not.toContain("could not be found");
+    expect(body.error).toBe("Each bill can only be selected once.");
+    expect((await db().bill.findUnique({ where: { id: bill.id } })).status).toBe("pending");
+  });
+
+  test("F14: picking a company loads its bill list once, so ticked bills are never wiped", async ({ loginAs, users, adminApi }) => {
+    knownBug("BUG-019");
+    const { company, category } = await adminApi.addCreditCategory();
+    await adminApi.createBill({ categoryId: category.id });
+    const ui = new BillingPage(await loginAs(users.op1));
+    // Hold back the 2nd /outstanding response (as on a busy LAN), so a
+    // duplicate load lands after the operator has already ticked a bill.
+    const loads = [];
+    await ui.page.route("**/api/companies/*/outstanding", async (route) => {
+      loads.push(route.request().url());
+      if (loads.length === 2) await new Promise((r) => setTimeout(r, 800));
+      await route.continue();
+    });
+
+    // Type the full company name, then Enter — the natural keyboard flow.
+    await ui.settleCompany.input.focus();
+    await ui.page.keyboard.type(company.name);
+    await ui.page.keyboard.press("Enter");
+    const box = ui.settleTable.locator(".settle-bill-checkbox");
+    await expect(box).toHaveCount(1);
+    await box.check();
+    await ui.page.waitForTimeout(1200);
+
+    await expect(box).toBeChecked();
+    expect(loads).toHaveLength(1);
   });
 
   test("F13: an invalid mode or empty selection is rejected by the API", async ({ adminApi }) => {

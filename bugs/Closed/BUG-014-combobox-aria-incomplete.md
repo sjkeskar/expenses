@@ -2,14 +2,14 @@
 
 | Field | Value |
 |---|---|
-| Status | Open |
+| Status | Closed |
 | Severity | Medium |
 | Area | Shared UI (`public/js/common.js`, `attachCombobox`) |
 | Reported | 2026-10-15 |
 | Found by | E2E `accessibility/axe.spec.js` › M2/BUG-014 (axe rules `aria-required-attr`, `aria-required-parent`, both critical) |
 | Assignee | — |
-| Resolution | — |
-| Verified by | — |
+| Resolution | Batch 4 of `bugs/FIX-PLAN.md` — `attachCombobox()` sets `role="listbox"` on the list and `aria-controls` on the input |
+| Verified by | `accessibility/axe.spec.js` › M2/BUG-014, green in three full `npm run test:e2e` runs (4 and 8 workers) on 2026-10-16 |
 
 ## Summary
 

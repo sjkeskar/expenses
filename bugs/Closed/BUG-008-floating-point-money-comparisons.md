@@ -2,14 +2,14 @@
 
 | Field | Value |
 |---|---|
-| Status | Open |
+| Status | Closed |
 | Severity | Medium |
 | Area | Bills / Transactions API (`src/routes/bills.js`, `src/routes/transactions.js`, `src/routes/companies.js`) |
 | Reported | 2026-10-15 |
 | Found by | Code review; confirmed by E2E `billing/create-bill.spec.js` › D21b, `billing/record-payment.spec.js` › E10 |
 | Assignee | — |
-| Resolution | — |
-| Verified by | — |
+| Resolution | Batch 1 of `bugs/FIX-PLAN.md` — new `src/utils/money.js` (integer-paise maths), used throughout `bills.js`, `transactions.js` and `companies.js` |
+| Verified by | `billing/create-bill.spec.js` › D21b, `billing/record-payment.spec.js` › E10, green in a full `npm run test:e2e` run on 2026-10-15 |
 
 ## Summary
 

@@ -86,6 +86,27 @@ function getTodayIstDateString() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
 }
 
+// Escapes a value for safe interpolation into an HTML string.
+//
+// Every table and dropdown in this app is rendered by building an HTML
+// string and assigning it to innerHTML, and the values going into those
+// strings are names a user typed — client, location, category, company,
+// user. Interpolating them raw meant a client literally named
+// `<img src=x onerror=...>` executed that script in every operator's,
+// admin's and accountant's browser the moment they opened a page listing
+// it (see bugs/Closed/BUG-004).
+//
+// So any user-typed text interpolated into innerHTML goes through this.
+// Amounts and dates don't need it — they go through formatCurrency /
+// formatDateTime, which only ever produce digits and punctuation — but
+// escaping them anyway would be harmless.
+function escapeHtml(value) {
+  return String(value ?? "").replace(
+    /[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]
+  );
+}
+
 function showMessage(el, text, isError) {
   el.textContent = text;
   el.className = "msg " + (isError ? "error" : "success");
@@ -106,6 +127,14 @@ function attachCombobox({ input, dropdown, hiddenInput, items, renderLabel, rend
   let currentItems = items;
   let visibleItems = []; // whatever's actually rendered in the dropdown right now
   let activeIndex = -1; // keyboard-highlighted row, -1 = none
+  let hideTimer; // pending "hide the list" timer from the last blur, if any
+
+  // Hides the list now, and cancels any pending delayed hide.
+  function hide() {
+    clearTimeout(hideTimer);
+    dropdown.style.display = "none";
+    input.setAttribute("aria-expanded", "false");
+  }
 
   function filterItems(query) {
     const q = query.trim().toLowerCase();
@@ -118,20 +147,20 @@ function attachCombobox({ input, dropdown, hiddenInput, items, renderLabel, rend
     activeIndex = -1;
 
     if (!visibleItems.length) {
-      dropdown.style.display = "none";
       dropdown.innerHTML = "";
-      input.setAttribute("aria-expanded", "false");
+      hide();
       return;
     }
     dropdown.innerHTML = visibleItems
       .map(
         (item, i) => `
-        <div class="combobox-item" role="option" id="${input.id}-opt-${i}" data-index="${i}" data-id="${item.id}">
-          <span>${renderLabel(item)}</span>
-          ${renderSub ? `<span class="combobox-sub">${renderSub(item)}</span>` : ""}
+        <div class="combobox-item" role="option" id="${input.id}-opt-${i}" data-index="${i}" data-id="${escapeHtml(item.id)}">
+          <span>${escapeHtml(renderLabel(item))}</span>
+          ${renderSub ? `<span class="combobox-sub">${escapeHtml(renderSub(item))}</span>` : ""}
         </div>`
       )
       .join("");
+    clearTimeout(hideTimer);
     dropdown.style.display = "block";
     input.setAttribute("aria-expanded", "true");
   }
@@ -155,8 +184,7 @@ function attachCombobox({ input, dropdown, hiddenInput, items, renderLabel, rend
     input.value = renderLabel(item);
     hiddenInput.value = item.id;
     if (onSelect) onSelect(item);
-    dropdown.style.display = "none";
-    input.setAttribute("aria-expanded", "false");
+    hide();
   }
 
   // What Enter/Tab should commit when nothing's been arrow-key-highlighted
@@ -173,8 +201,20 @@ function attachCombobox({ input, dropdown, hiddenInput, items, renderLabel, rend
   input.setAttribute("role", "combobox");
   input.setAttribute("aria-expanded", "false");
   input.setAttribute("aria-autocomplete", "list");
+  // A combobox's popup must say what it is, and the input must point at
+  // it — without both, a screen reader announces the field as a plain
+  // text box and never reads the suggestions (see bugs/Open/BUG-014).
+  // aria-expanded and aria-activedescendant were already handled above.
+  dropdown.setAttribute("role", "listbox");
+  input.setAttribute("aria-controls", dropdown.id);
+  // Chrome makes a scrollable element a Tab stop of its own, so once the
+  // list was long enough to scroll, Tab moved focus into the list instead
+  // of on to the next field and the operator lost their place (see
+  // bugs/Open/BUG-018). Mouse scrolling is unaffected by this.
+  dropdown.tabIndex = -1;
 
   input.addEventListener("input", () => {
+    clearTimeout(hideTimer);
     hiddenInput.value = "";
     const filtered = filterItems(input.value);
     render(filtered);
@@ -189,12 +229,22 @@ function attachCombobox({ input, dropdown, hiddenInput, items, renderLabel, rend
   });
 
   input.addEventListener("focus", () => {
+    clearTimeout(hideTimer);
     render(filterItems(input.value));
   });
 
   input.addEventListener("blur", () => {
     // Delay so a click on a suggestion registers before the list hides.
-    setTimeout(() => {
+    //
+    // The timer id is kept so that re-focusing the field (or typing in it)
+    // within the 150ms cancels it. Without that, a blur followed quickly
+    // by a focus left a stale timer that fired afterwards and closed the
+    // list the operator was already looking at (see bugs/Open/BUG-009).
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => {
+      // Belt and braces: if focus has come back to the field in the
+      // meantime, there is nothing to hide.
+      if (document.activeElement === input) return;
       dropdown.style.display = "none";
       input.setAttribute("aria-expanded", "false");
     }, 150);
@@ -234,11 +284,15 @@ function attachCombobox({ input, dropdown, hiddenInput, items, renderLabel, rend
       if (!isOpen) return;
       const selection = resolveSelection();
       if (selection) commit(selection);
+      // Hide immediately rather than waiting out the blur delay. That
+      // delay exists only so a mouse click on a suggestion lands before
+      // the list disappears; a Tab press needs no grace period, and
+      // leaving the list up means Tab appears to move focus nowhere.
+      hide();
     } else if (e.key === "Escape") {
       if (!isOpen) return;
       e.preventDefault();
-      dropdown.style.display = "none";
-      input.setAttribute("aria-expanded", "false");
+      hide();
     }
   });
 
@@ -262,6 +316,139 @@ function attachCombobox({ input, dropdown, hiddenInput, items, renderLabel, rend
   };
 }
 
+// The button that submitted this form: e.submitter for a real click and,
+// per the HTML spec, for implicit submission with Enter too. The fallback
+// finds the form's default submit button, so submitOnce below can never
+// trip over a null submitter.
+function submitButtonFor(e) {
+  return (
+    e.submitter ||
+    (e.target &&
+      e.target.querySelector('button[type="submit"], button:not([type]), input[type="submit"]'))
+  );
+}
+
+// Runs `run` with `button` disabled for the duration, and drops the call
+// entirely if the button is already disabled.
+//
+// That is what makes a double-click on Create Bill or Record Payment
+// create one record instead of two (see bugs/Open/BUG-010): a disabled
+// button fires no further click or submit event, so the second click of a
+// double-click never reaches a handler. The button is re-enabled in a
+// `finally`, so a validation failure or a server error still leaves the
+// form usable.
+//
+// The server-side row locks added for BUG-011 close the matching window
+// on the API side; this is the half the operator actually sees.
+async function submitOnce(button, run) {
+  if (button) {
+    if (button.disabled) return;
+    button.disabled = true;
+  }
+  try {
+    await run();
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+// Shared keyboard behaviour for the app's modals (see bugs/Open/BUG-015).
+//
+// The modals are a plain `.modal-overlay` > `.modal-box` pair toggled with
+// style.display, and that is all they were: nothing announced them as a
+// dialog, focus stayed behind on the page, Tab walked straight out into
+// the page underneath, Escape did nothing, and closing left focus
+// nowhere. This adds the five things a dialog owes a keyboard user:
+//
+//   1. role="dialog" + aria-modal="true", labelled by the box's own <h2>
+//   2. focus moves to the first control on open
+//   3. Tab (and Shift+Tab) wrap within the dialog instead of escaping it
+//   4. Escape closes it
+//   5. focus returns to whatever opened it
+//
+// Native <dialog> + showModal() would give 2-5 for free and is the better
+// long-term shape, but it would mean reworking .modal-overlay/.modal-box
+// onto ::backdrop and re-baselining every modal screenshot — see the
+// "Divergences" note in bugs/FIX-PLAN.md. This keeps the existing CSS and
+// backdrop-click-to-close exactly as they are.
+//
+// Returns { open(opener), close() }. `opener` is the element focus should
+// return to; it defaults to whatever was focused when open() was called.
+function setupModal(modal, { onClose } = {}) {
+  const box = modal.querySelector(".modal-box") || modal;
+  let lastFocused = null;
+
+  box.setAttribute("role", "dialog");
+  box.setAttribute("aria-modal", "true");
+  const heading = box.querySelector("h2");
+  if (heading) {
+    if (!heading.id) heading.id = `${modal.id}-title`;
+    box.setAttribute("aria-labelledby", heading.id);
+  }
+
+  const FOCUSABLE = [
+    "a[href]",
+    "button:not([disabled])",
+    'input:not([disabled]):not([type="hidden"])',
+    "select:not([disabled])",
+    "textarea:not([disabled])",
+    '[tabindex]:not([tabindex="-1"])',
+  ].join(", ");
+
+  // Only controls that are actually on screen — a hidden one would be a
+  // dead stop in the Tab cycle. offsetParent is null for anything inside
+  // a display:none subtree, which is how these modals are hidden.
+  function focusable() {
+    return Array.from(box.querySelectorAll(FOCUSABLE)).filter((el) => el.offsetParent !== null);
+  }
+
+  function close() {
+    modal.style.display = "none";
+    if (onClose) onClose();
+    const opener = lastFocused;
+    lastFocused = null;
+    if (opener && typeof opener.focus === "function") opener.focus();
+  }
+
+  function open(opener) {
+    lastFocused = opener || document.activeElement;
+    modal.style.display = "flex";
+    const items = focusable();
+    if (items.length) {
+      items[0].focus();
+    } else {
+      // Nothing focusable (shouldn't happen) — still move focus in, so
+      // Escape below has somewhere to fire from.
+      box.tabIndex = -1;
+      box.focus();
+    }
+  }
+
+  modal.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      close();
+      return;
+    }
+    if (e.key !== "Tab") return;
+
+    const items = focusable();
+    if (!items.length) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  });
+
+  return { open, close };
+}
+
 // Wires up the shared "Change Password" modal (markup duplicated across
 // operator.html / admin.html / developer.html, logic centralized here).
 // Safe to call on any page — does nothing if the modal's elements aren't
@@ -275,31 +462,32 @@ function setupChangePasswordModal() {
 
   if (!openBtn || !modal || !form || !msg) return;
 
-  function closeModal() {
-    modal.style.display = "none";
-    form.reset();
-    msg.textContent = "";
-    msg.className = "msg";
-  }
+  const dialog = setupModal(modal, {
+    onClose: () => {
+      form.reset();
+      msg.textContent = "";
+      msg.className = "msg";
+    },
+  });
 
   openBtn.addEventListener("click", () => {
     msg.textContent = "";
     msg.className = "msg";
-    modal.style.display = "flex";
+    dialog.open(openBtn);
   });
 
-  cancelBtn.addEventListener("click", closeModal);
+  cancelBtn.addEventListener("click", () => dialog.close());
 
   // Click on the dimmed backdrop (not the box itself) also closes it.
   modal.addEventListener("click", (e) => {
-    if (e.target === modal) closeModal();
+    if (e.target === modal) dialog.close();
   });
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const currentPassword = document.getElementById("current-password").value;
-    const newPassword = document.getElementById("new-password").value;
-    const confirmPassword = document.getElementById("confirm-new-password").value;
+    const currentPassword = modal.querySelector("#current-password").value;
+    const newPassword = modal.querySelector("#new-password").value;
+    const confirmPassword = modal.querySelector("#confirm-new-password").value;
 
     if (newPassword !== confirmPassword) {
       showMessage(msg, "New password and confirmation do not match.", true);

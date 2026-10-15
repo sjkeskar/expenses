@@ -2,14 +2,14 @@
 
 | Field | Value |
 |---|---|
-| Status | Open |
+| Status | Closed |
 | Severity | High |
 | Area | Transactions API (`src/routes/transactions.js`) |
 | Reported | 2026-10-15 |
 | Found by | Code review; confirmed by E2E `billing/record-payment.spec.js` › E14, E15 |
 | Assignee | — |
-| Resolution | — |
-| Verified by | — |
+| Resolution | Batch 1 of `bugs/FIX-PLAN.md` — refunded-bill guard in `src/routes/transactions.js` PATCH and DELETE |
+| Verified by | `billing/record-payment.spec.js` › E14, E15, green in a full `npm run test:e2e` run on 2026-10-15 |
 
 ## Summary
 

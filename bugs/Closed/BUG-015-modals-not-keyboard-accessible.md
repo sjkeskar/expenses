@@ -2,14 +2,14 @@
 
 | Field | Value |
 |---|---|
-| Status | Open |
+| Status | Closed |
 | Severity | Medium |
 | Area | Shared UI (`public/js/common.js` `setupChangePasswordModal`; `setupRefundModal` in operator.js / admin.js; modal markup in all role pages) |
 | Reported | 2026-10-15 |
 | Found by | E2E `accessibility/keyboard.spec.js` › M3h (both modals) |
 | Assignee | — |
-| Resolution | — |
-| Verified by | — |
+| Resolution | Batch 5 of `bugs/FIX-PLAN.md` — shared `setupModal()` helper in `public/js/common.js` (dialog role/labelling, focus in, Tab trap, Escape, focus restore), used by Change Password and both Refund modals |
+| Verified by | `accessibility/keyboard.spec.js` › M3h (both modals) and the new M3i (Shift+Tab wrap, focus restored after Cancel and backdrop click), green in three full `npm run test:e2e` runs (4 and 8 workers) on 2026-10-16 |
 
 ## Summary
 

@@ -2,14 +2,14 @@
 
 | Field | Value |
 |---|---|
-| Status | Open |
+| Status | Closed |
 | Severity | Critical |
 | Area | Bills / Transactions / Settlement API |
 | Reported | 2026-10-15 |
 | Found by | E2E `robustness/concurrency.spec.js` › L2, L5, L6 (reproduced in 3/3 runs) |
 | Assignee | — |
-| Resolution | — |
-| Verified by | — |
+| Resolution | Batch 1 of `bugs/FIX-PLAN.md` — `SELECT ... FOR UPDATE` row lock taken before the read in all five write transactions, settlement locking ids one at a time in sorted order |
+| Verified by | `robustness/concurrency.spec.js` › L2, L5, L6, green in a full `npm run test:e2e` run on 2026-10-15 |
 
 ## Summary
 
