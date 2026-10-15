@@ -23,6 +23,7 @@ role).
 - Bulk settlement for a company is hand-picked, not FIFO — the person settling sees that company's actual outstanding bills (with client names) and checks off exactly which ones to close in full; anything disputed is simply left unchecked
 - Record Payment supports an optional additional discount on top of whatever discount the bill already had at creation. This is tracked per-transaction (`Transaction.discountAmount`) for audit purposes, and folds into `Bill.discountAmount`/`netAmount`/`balance` so existing analytics (which read those bill-level totals) pick it up with no separate reporting logic. Editing or deleting a transaction correctly reverses/reapplies both its amount AND its discount, not just the amount
 - Credit-category bills require a Company; the company's running balance across all its bills is settled via one lump-sum "Settle Company Balance" action, applied oldest-bill-first (FIFO)
+- Admin can reassign a bill's operator (Reassign Operator tab). Every move is recorded as a permanent, append-only `BillReassignment` row (never updated or deleted) alongside the `Bill.createdById` update, inside the same transaction — the full A→B→C history is always visible in the admin UI, not just the current operator. Payments already collected stay attributed to whoever actually took them (`Transaction.operatorId` is untouched)
 - Port: 8080
 
 ## One-time setup on the server PC
@@ -63,6 +64,12 @@ role).
    ```
    npx prisma migrate dev --name init
    ```
+   On an **already-running install** being updated to a newer copy of this
+   project (rather than a fresh setup), running `npx prisma migrate dev`
+   again will pick up any schema changes since your last migration — e.g.
+   the `bill_reassignments` audit table — and prompt you to name a new
+   migration (e.g. `add_bill_reassignment_audit`). It will not touch your
+   existing data.
 
 6. **Create the first developer account** (only a developer can create other
    users, so this one has to be inserted directly):

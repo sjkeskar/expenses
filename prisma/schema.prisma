@@ -67,6 +67,15 @@ model User {
   createdBills         Bill[]        @relation("BillCreatedBy")
   refundedBills        Bill[]        @relation("BillRefundedBy")
 
+  // Reassignment audit trail — see BillReassignment below. Three distinct
+  // roles a user can play in one reassignment event: the operator the bill
+  // moved FROM, the operator it moved TO, and the admin who performed the
+  // move. All three are kept even though "performed by" is always an admin
+  // today, because the schema shouldn't assume that stays true forever.
+  reassignmentsFrom BillReassignment[] @relation("ReassignmentFromOperator")
+  reassignmentsTo   BillReassignment[] @relation("ReassignmentToOperator")
+  reassignmentsMade BillReassignment[] @relation("ReassignmentPerformedBy")
+
   @@map("users")
 }
 
@@ -213,9 +222,52 @@ model Bill {
   refundedById   String?
   refundedBy     User?     @relation("BillRefundedBy", fields: [refundedById], references: [id])
 
+  // Full reassignment history — see BillReassignment below. Deliberately
+  // NOT a flat "lastReassignedBy/At" pair on this row: a single pair can
+  // only ever show the MOST RECENT move, silently destroying the record
+  // of every prior operator a bill passed through. The audit trail lives
+  // entirely in BillReassignment; order by reassignedAt to read the chain.
+  reassignments BillReassignment[]
+
   transactions Transaction[]
 
   @@map("bills")
+}
+
+// ---------------------------------------------------------------------------
+// bill_reassignments — append-only audit log for "Admin: Reassign a Bill's
+// Operator". ONE ROW PER MOVE, never updated or deleted, so the full chain
+// of custody for a bill (A -> B -> C -> ...) is always reconstructible,
+// not just the most recent step. Bill.createdById is still the CURRENT
+// operator (read directly, so every existing query — My Bills, Operator-
+// wise analytics — keeps working with zero changes); this table is purely
+// additive history layered on top of it.
+//
+// Scope is deliberately bill-only, matching the refund feature's own
+// boundary: reassigning a bill's operator does NOT touch
+// Transaction.operatorId, so payments already taken stay attributed to
+// whoever actually collected them, regardless of who the bill belongs to
+// now or belonged to before.
+// ---------------------------------------------------------------------------
+model BillReassignment {
+  id     String @id @default(uuid())
+  billId String
+  bill   Bill   @relation(fields: [billId], references: [id])
+
+  // Nullable: the bill may have had no operator yet (a legacy bill with
+  // createdById null) when this move happened — that's a real, valid
+  // starting state, not missing data.
+  fromOperatorId String?
+  fromOperator   User?   @relation("ReassignmentFromOperator", fields: [fromOperatorId], references: [id])
+
+  toOperatorId String
+  toOperator   User   @relation("ReassignmentToOperator", fields: [toOperatorId], references: [id])
+
+  reassignedById String
+  reassignedBy   User     @relation("ReassignmentPerformedBy", fields: [reassignedById], references: [id])
+  reassignedAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  @@map("bill_reassignments")
 }
 
 // ---------------------------------------------------------------------------

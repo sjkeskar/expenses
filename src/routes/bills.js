@@ -39,6 +39,17 @@ router.get("/:id", requireAuth, requireRole("operator", "admin"), async (req, re
       company: { select: { id: true, name: true } },
       createdBy: { select: { id: true, name: true } },
       refundedBy: { select: { id: true, name: true } },
+      // Full reassignment history, oldest first — this is the audit trail
+      // (see the BillReassignment comment in schema.prisma): every move
+      // this bill has ever made, not just the most recent one.
+      reassignments: {
+        include: {
+          fromOperator: { select: { id: true, name: true } },
+          toOperator: { select: { id: true, name: true } },
+          reassignedBy: { select: { id: true, name: true } },
+        },
+        orderBy: { reassignedAt: "asc" },
+      },
       transactions: {
         where: { isDeleted: false },
         include: { operator: { select: { id: true, name: true } } },
@@ -301,6 +312,89 @@ router.patch("/:id/refund", requireAuth, requireRole("operator", "admin"), async
       return res.status(err.status).json({ error: err.message });
     }
     res.status(500).json({ error: "Could not refund bill." });
+  }
+});
+
+// PATCH /api/bills/:id/reassign-operator — admin only.
+// Body: { operatorId }
+//
+// Moves a bill to a different operator's "My Bills" and Operator-wise
+// billed totals (Bill.createdById is read directly by both, so no other
+// code needs to change). Payments already taken are NEVER touched —
+// Transaction.operatorId stays exactly as it was, matching the refund
+// feature's own "bill only" scope.
+//
+// Every move writes a BillReassignment row FIRST, inside the same
+// transaction as the createdById update, so the two can never drift apart
+// — there is no way for this bill to end up with a different current
+// operator than its own most recent audit row says. See the
+// BillReassignment comment in schema.prisma for why this is a full
+// append-only log rather than two flat columns on Bill.
+router.patch("/:id/reassign-operator", requireAuth, requireRole("admin"), async (req, res) => {
+  const { operatorId } = req.body;
+  const adminId = req.session.user.id;
+
+  if (!operatorId) {
+    return res.status(400).json({ error: "operatorId is required." });
+  }
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const bill = await tx.bill.findUnique({ where: { id: req.params.id } });
+      if (!bill) {
+        throw { status: 404, message: "Bill not found." };
+      }
+
+      const target = await tx.user.findUnique({ where: { id: operatorId } });
+      if (!target || target.isDeleted) {
+        throw { status: 400, message: "Target user not found or is deactivated." };
+      }
+      if (!["operator", "admin"].includes(target.role)) {
+        throw { status: 400, message: "Target user must be an operator or admin." };
+      }
+      if (target.id === bill.createdById) {
+        throw { status: 400, message: "This bill is already assigned to that operator." };
+      }
+
+      await tx.billReassignment.create({
+        data: {
+          billId: bill.id,
+          fromOperatorId: bill.createdById, // may be null — a legacy, unattributed bill is a valid starting point
+          toOperatorId: target.id,
+          reassignedById: adminId,
+        },
+      });
+
+      const updated = await tx.bill.update({
+        where: { id: bill.id },
+        data: { createdById: target.id },
+        include: {
+          client: { select: { id: true, name: true } },
+          location: { select: { id: true, name: true } },
+          category: { select: { id: true, name: true, type: true } },
+          company: { select: { id: true, name: true } },
+          createdBy: { select: { id: true, name: true } },
+          refundedBy: { select: { id: true, name: true } },
+          reassignments: {
+            include: {
+              fromOperator: { select: { id: true, name: true } },
+              toOperator: { select: { id: true, name: true } },
+              reassignedBy: { select: { id: true, name: true } },
+            },
+            orderBy: { reassignedAt: "asc" },
+          },
+        },
+      });
+
+      return updated;
+    });
+
+    res.json({ bill: result });
+  } catch (err) {
+    if (err && err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    res.status(500).json({ error: "Could not reassign this bill's operator." });
   }
 });
 

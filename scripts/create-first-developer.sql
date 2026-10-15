@@ -14,7 +14,7 @@ INSERT INTO "users" ("id", "name", "passwordHash", "role", "isDeleted", "created
 VALUES (
   gen_random_uuid(),          -- requires the pgcrypto extension; see note below
   'admin_dev',                 -- <-- change to the login name you want
-  'PASTE_ARGON2_HASH_HERE',    -- <-- paste the hash from generate-password-hash.js
+  '$argon2id$v=19$m=65536,t=3,p=4$WkELJxv5jiG9JqI+jRaZtw$KqrpLt6CuN3eGU+obGkjiqFabjO0Fmq39LKgp29v40I',    -- <-- paste the hash from generate-password-hash.js
   'developer',
   false,
   now()

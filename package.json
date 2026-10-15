@@ -9,7 +9,11 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
-    "hash-password": "node scripts/generate-password-hash.js"
+    "hash-password": "node scripts/generate-password-hash.js",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:report": "playwright show-report e2e/report",
+    "test:e2e:update-snapshots": "playwright test e2e/specs/visual --update-snapshots"
   },
   "dependencies": {
     "@prisma/client": "^5.20.0",
@@ -19,6 +23,8 @@
     "express-session": "^1.18.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@playwright/test": "^1.64.1",
     "prisma": "^5.20.0"
   }
 }

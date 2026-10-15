@@ -1,3 +1,8 @@
 node_modules/
 .env
+.env.test
 *.log
+
+# Playwright E2E artefacts
+e2e/test-results/
+e2e/report/

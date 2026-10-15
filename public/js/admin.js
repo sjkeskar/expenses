@@ -12,10 +12,12 @@ let categoryCombobox = null;
 let newCategoryCompanyCombobox = null;
 let settleCompanyCombobox = null;
 let billCombobox = null;
+let reassignBillCombobox = null;
 let ledgerClientCombobox = null;
 let currentLedgerClientId = null;
 let selectedCategory = null;
 let settleBills = [];
+let reassignTargets = [];
 let pendingRefundBillId = null;
 
 // Once a bill is refunded, balance is force-zeroed by the refund itself
@@ -82,12 +84,14 @@ function setupTabs() {
       document.getElementById("tab-billing").style.display = "none";
       document.getElementById("tab-analytics").style.display = "none";
       document.getElementById("tab-promote").style.display = "none";
+      document.getElementById("tab-reassign").style.display = "none";
       document.getElementById("tab-locations").style.display = "none";
       document.getElementById("tab-categories").style.display = "none";
       document.getElementById(`tab-${btn.dataset.tab}`).style.display = "block";
 
       if (btn.dataset.tab === "analytics") await loadAnalytics();
       if (btn.dataset.tab === "promote") await loadOperators();
+      if (btn.dataset.tab === "reassign") await loadReassignData();
       if (btn.dataset.tab === "locations") await loadLocationsTable();
       if (btn.dataset.tab === "categories") await loadCategoriesTable();
     });
@@ -137,6 +141,19 @@ function setupComboboxes() {
     renderSub: (b) => `Balance: ${formatCurrency(b.balance)}`,
   });
 
+  // Any bill is a valid reassignment target — not just pending ones like
+  // the Record Payment combobox above, since an admin may need to correct
+  // attribution on a fully-paid (or even refunded) bill too.
+  reassignBillCombobox = attachCombobox({
+    input: document.getElementById("reassign-bill-input"),
+    dropdown: document.getElementById("reassign-bill-dropdown"),
+    hiddenInput: document.getElementById("reassign-bill-id"),
+    items: [],
+    renderLabel: (b) => `${b.billNumber} — ${b.client.name}`,
+    renderSub: (b) => `Current operator: ${b.createdBy ? b.createdBy.name : "Unattributed (legacy bill)"}`,
+    onSelect: (bill) => loadReassignHistory(bill.id),
+  });
+
   settleCompanyCombobox = attachCombobox({
     input: document.getElementById("settle-company-input"),
     dropdown: document.getElementById("settle-company-dropdown"),
@@ -167,6 +184,12 @@ function setupComboboxes() {
     hiddenInput: document.getElementById("new-category-company-id"),
     items: [],
     renderLabel: (c) => c.name,
+  });
+
+  document.getElementById("reassign-bill-input").addEventListener("input", () => {
+    if (!document.getElementById("reassign-bill-id").value) {
+      renderReassignHistory(null);
+    }
   });
 
   document.getElementById("new-category-type").addEventListener("change", (e) => {
@@ -746,6 +769,96 @@ document.getElementById("promote-form").addEventListener("submit", async (e) => 
     const { user } = await api(`/users/${id}/promote`, { method: "PATCH" });
     showMessage(msg, `${user.name} promoted to admin.`, false);
     await loadOperators();
+  } catch (err) {
+    showMessage(msg, err.message, true);
+  }
+});
+
+// ---------- Reassign Operator ----------
+
+async function loadReassignData() {
+  // All bills, not just the admin's own — any bill can be reassigned.
+  const data = await api("/bills");
+  reassignBillCombobox.updateItems(data.bills);
+
+  const { targets } = await api("/users/reassign-targets");
+  reassignTargets = targets;
+  const select = document.getElementById("reassign-target");
+  select.innerHTML = targets
+    .map((t) => `<option value="${t.id}">${t.name} (${t.role})</option>`)
+    .join("");
+
+  renderReassignHistory(null);
+}
+
+// Re-fetches the single bill (GET /bills/:id) because the bulk list from
+// GET /bills does not include its reassignment history — only the
+// single-bill endpoint does (see bills.js).
+async function loadReassignHistory(billId) {
+  try {
+    const { bill } = await api(`/bills/${billId}`);
+    renderReassignHistory(bill);
+  } catch (err) {
+    renderReassignHistory(null);
+  }
+}
+
+function renderReassignHistory(bill) {
+  const empty = document.getElementById("reassign-history-empty");
+  const table = document.getElementById("reassign-history-table");
+  const tbody = table.querySelector("tbody");
+
+  const history = bill && bill.reassignments ? bill.reassignments : [];
+  if (!history.length) {
+    tbody.innerHTML = "";
+    table.style.display = "none";
+    empty.style.display = "block";
+    empty.textContent = bill
+      ? "This bill has never been reassigned."
+      : "Select a bill above to see its full reassignment history.";
+    return;
+  }
+
+  empty.style.display = "none";
+  table.style.display = "table";
+  tbody.innerHTML = history
+    .map(
+      (r) => `
+      <tr>
+        <td>${formatDateTime(r.reassignedAt)}</td>
+        <td>${r.fromOperator ? r.fromOperator.name : "Unattributed (legacy bill)"}</td>
+        <td>${r.toOperator.name}</td>
+        <td>${r.reassignedBy.name}</td>
+      </tr>`
+    )
+    .join("");
+}
+
+document.getElementById("reassign-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const msg = document.getElementById("reassign-msg");
+  const billId = document.getElementById("reassign-bill-id").value;
+  const operatorId = document.getElementById("reassign-target").value;
+
+  if (!billId) {
+    showMessage(msg, "Pick a bill from the dropdown first.", true);
+    return;
+  }
+
+  const target = reassignTargets.find((t) => t.id === operatorId);
+  if (!confirm(`Reassign this bill to ${target ? target.name : "the selected user"}? This will be recorded permanently in the audit trail.`)) {
+    return;
+  }
+
+  try {
+    const { bill } = await api(`/bills/${billId}/reassign-operator`, {
+      method: "PATCH",
+      body: { operatorId },
+    });
+    showMessage(msg, `Bill ${bill.billNumber} reassigned to ${bill.createdBy.name}.`, false);
+    await loadReassignData();
+    renderReassignHistory(bill);
+    await loadBills();
   } catch (err) {
     showMessage(msg, err.message, true);
   }

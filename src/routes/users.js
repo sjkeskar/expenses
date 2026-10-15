@@ -23,6 +23,23 @@ router.get(
   }
 );
 
+// GET /api/users/reassign-targets — admin only. Any active operator or
+// admin is a valid bill-reassignment target (unlike /operators above,
+// which is operator-only and feeds the Promote tab specifically).
+router.get(
+  "/reassign-targets",
+  requireAuth,
+  requireRole("admin"),
+  async (req, res) => {
+    const targets = await prisma.user.findMany({
+      where: { isDeleted: false, role: { in: ["operator", "admin"] } },
+      select: { id: true, name: true, role: true },
+      orderBy: { name: "asc" },
+    });
+    res.json({ targets });
+  }
+);
+
 // GET /api/users — developer only (needed to manage the account list).
 router.get("/", requireAuth, requireRole("developer"), async (req, res) => {
   const users = await prisma.user.findMany({

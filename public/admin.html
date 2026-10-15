@@ -25,6 +25,7 @@
       <button data-tab="billing" class="active">Billing</button>
       <button data-tab="analytics">Analytics</button>
       <button data-tab="promote">Promote Operator</button>
+      <button data-tab="reassign">Reassign Operator</button>
       <button data-tab="locations">Locations</button>
       <button data-tab="categories">Categories</button>
     </div>
@@ -302,6 +303,44 @@
           <button type="submit">Promote to Admin</button>
         </form>
         <div id="promote-msg" class="msg"></div>
+      </div>
+    </section>
+
+    <!-- Reassign Operator tab -->
+    <section id="tab-reassign" style="display:none;">
+      <div class="card">
+        <h2>Reassign a Bill's Operator</h2>
+        <p style="color:var(--muted); font-size:13px;">
+          Moves a bill to a different operator's "My Bills" and Operator-wise analytics totals.
+          Payments already collected on this bill stay attributed to whoever actually took them —
+          only the bill's own operator changes. Every move is recorded below as a permanent audit
+          trail; nothing is ever overwritten or deleted.
+        </p>
+        <form id="reassign-form" class="inline-form">
+          <div class="field combobox-wrapper">
+            <label for="reassign-bill-input">Bill (type bill number or client name)</label>
+            <input type="text" id="reassign-bill-input" autocomplete="off" required placeholder="Search all bills" />
+            <input type="hidden" id="reassign-bill-id" />
+            <div id="reassign-bill-dropdown" class="combobox-list" style="display:none;"></div>
+          </div>
+          <div class="field">
+            <label for="reassign-target">New operator</label>
+            <select id="reassign-target" required></select>
+          </div>
+          <button type="submit">Reassign</button>
+        </form>
+        <div id="reassign-msg" class="msg"></div>
+      </div>
+
+      <div class="card">
+        <h2>Reassignment History</h2>
+        <p id="reassign-history-empty" style="color:var(--muted); font-size:13px;">
+          Select a bill above to see its full reassignment history.
+        </p>
+        <table id="reassign-history-table" style="display:none;">
+          <thead><tr><th>When</th><th>From</th><th>To</th><th>Reassigned By</th></tr></thead>
+          <tbody></tbody>
+        </table>
       </div>
     </section>
 
