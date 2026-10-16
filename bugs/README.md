@@ -60,4 +60,5 @@ expected-failure summary, run `E2E_SHOW_BUGS=1 npm run test:e2e`.
 | [BUG-016](Closed/BUG-016-input-focus-ring-overridden.md) | Intended keyboard focus ring for inputs/selects is overridden by later CSS | Low | Styles | Closed |
 | [BUG-017](Closed/BUG-017-login-page-no-main-landmark.md) | Login page has no main landmark | Low | Login page | Closed |
 | [BUG-018](Closed/BUG-018-tab-from-combobox-loses-focus.md) | Tabbing out of a search field with a long list loses keyboard focus | Medium | Shared UI (common.js) | Closed |
-| [BUG-019](Open/BUG-019-settle-list-double-load-wipes-ticks.md) | Picking a settlement company loads its bills twice; the second load wipes ticked bills | Medium | Operator/Admin UI | Open |
+| [BUG-019](Closed/BUG-019-settle-list-double-load-wipes-ticks.md) | Picking a settlement company loads its bills twice; the second load wipes ticked bills | Medium | Operator/Admin UI | Closed |
+| [BUG-020](Open/BUG-020-settle-list-not-refreshed-after-failed-settlement.md) | After a failed settlement, the settle list can't be refreshed by re-picking the company | Low | Operator/Admin UI | Open |

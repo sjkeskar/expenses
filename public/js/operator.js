@@ -13,6 +13,7 @@ let settleCompanyCombobox = null;
 let billCombobox = null;
 let selectedCategory = null;
 let settleBills = [];
+let settleLoadToken = 0; // increments per settle-list load, so a stale response can be dropped
 let pendingRefundBillId = null;
 let refundDialog = null; // { open, close } from setupModal — see common.js
 
@@ -124,8 +125,23 @@ async function loadSettleBillsList(companyId) {
   const tbody = document.querySelector("#settle-bills-table tbody");
   const totalInfo = document.getElementById("settle-total-info");
 
+  // Which bills are ticked right now. Re-rendering this list rebuilds the
+  // checkboxes from scratch, so without carrying these over any reload
+  // throws the operator's selection away (see bugs/Open/BUG-019). Ids from
+  // a different company simply won't match, so switching company still
+  // starts clean.
+  const ticked = new Set(
+    Array.from(tbody.querySelectorAll(".settle-bill-checkbox:checked")).map((cb) => cb.dataset.id)
+  );
+
+  // Loads aren't otherwise sequenced: pick company A then quickly company
+  // B, and a late response for A would paint over B's list. Only the most
+  // recently started load is allowed to render.
+  const token = ++settleLoadToken;
+
   try {
     const data = await api(`/companies/${companyId}/outstanding`);
+    if (token !== settleLoadToken) return;
     settleBills = data.pendingBills;
 
     if (settleBills.length === 0) {
@@ -139,7 +155,7 @@ async function loadSettleBillsList(companyId) {
       .map(
         (b) => `
         <tr>
-          <td><input type="checkbox" class="settle-bill-checkbox" data-id="${escapeHtml(b.id)}" data-balance="${escapeHtml(b.balance)}" aria-label="Settle bill ${escapeHtml(b.billNumber)} — ${escapeHtml(b.client.name)}" /></td>
+          <td><input type="checkbox" class="settle-bill-checkbox" data-id="${escapeHtml(b.id)}" data-balance="${escapeHtml(b.balance)}" aria-label="Settle bill ${escapeHtml(b.billNumber)} — ${escapeHtml(b.client.name)}"${ticked.has(b.id) ? " checked" : ""} /></td>
           <td>${escapeHtml(b.billNumber)}</td>
           <td>${escapeHtml(b.client.name)}</td>
           <td>${formatCurrency(b.balance)}</td>
@@ -155,6 +171,7 @@ async function loadSettleBillsList(companyId) {
     container.style.display = "block";
     updateSettleTotal();
   } catch (err) {
+    if (token !== settleLoadToken) return;
     settleBills = [];
     tbody.innerHTML = "";
     container.style.display = "none";

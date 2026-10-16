@@ -113,10 +113,7 @@ test.describe("Keyboard-only workflows", () => {
     const page = ui.page;
 
     await tabTo(page, "settle-company-input");
-    // A unique prefix, not the full name: typing the exact name selects it a
-    // first time and Enter a second time, and that double load can wipe the
-    // ticks below (BUG-019, tested on its own in billing/settle.spec.js F14).
-    await page.keyboard.type(company.name.slice(0, -1));
+    await page.keyboard.type(company.name); // full name + Enter: loads once (BUG-019)
     await page.keyboard.press("Enter");
     await expect(ui.settleTable.locator(".settle-bill-checkbox")).toHaveCount(2);
     await page.keyboard.press("Tab"); // mode select

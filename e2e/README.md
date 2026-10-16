@@ -132,7 +132,7 @@ IDs match the test plan. Each test title starts with its ID.
 | Create Bill (operator + admin), IST bill date | D1–D21 | `billing/create-bill` |
 | Bill numbering, rollover, 9999 cap, concurrency | D14–D16, L1 | `billing/bill-number` |
 | Record Payment, transaction edit/delete API | E1–E16 | `billing/record-payment` |
-| Settle Company Balance | F1–F14 | `billing/settle` |
+| Settle Company Balance, settle-list loading | F1–F17 | `billing/settle` |
 | My Bills totals, Refund modal | G1–G5 | `billing/my-bills-refund` |
 | My Bills PDF, every analytics PDF | G7, I8 | `analytics/pdf-export` |
 | Admin tabs: promote, reassign, locations, categories | H0–H11 | `admin/admin-tabs` |

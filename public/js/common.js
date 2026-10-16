@@ -128,6 +128,7 @@ function attachCombobox({ input, dropdown, hiddenInput, items, renderLabel, rend
   let visibleItems = []; // whatever's actually rendered in the dropdown right now
   let activeIndex = -1; // keyboard-highlighted row, -1 = none
   let hideTimer; // pending "hide the list" timer from the last blur, if any
+  let notifiedId = null; // id onSelect was last fired for
 
   // Hides the list now, and cancels any pending delayed hide.
   function hide() {
@@ -178,12 +179,44 @@ function attachCombobox({ input, dropdown, hiddenInput, items, renderLabel, rend
     input.setAttribute("aria-activedescendant", activeIndex >= 0 ? `${input.id}-opt-${activeIndex}` : "");
   }
 
+  // Records a selection and tells the caller about it — but only when the
+  // selected item actually CHANGED.
+  //
+  // Typing a company's full name and pressing Enter is two separate
+  // events, and both used to fire onSelect for the same item: the `input`
+  // handler on the last keystroke (it found an exact match) and then
+  // commit() on the Enter. For the settle picker that meant two
+  // GET /companies/:id/outstanding calls, and the second response
+  // re-rendered the checklist from scratch — silently wiping any bill the
+  // operator had already ticked (see bugs/Open/BUG-019).
+  //
+  // So onSelect means "the selected id changed", not "something was
+  // committed". All of its callers are idempotent per-id loads (the
+  // credit-category hint, the reassign history, the settle list, the
+  // client ledger), which is the behaviour they already wanted. The
+  // trade-off: re-picking the item that is already selected no longer
+  // forces a refresh.
+  function notifySelection(item) {
+    hiddenInput.value = item.id;
+    if (item.id === notifiedId) return;
+    notifiedId = item.id;
+    if (onSelect) onSelect(item);
+  }
+
+  // No valid selection any more. Resetting notifiedId here is what lets
+  // the SAME item be selected again later and still notify — which the
+  // settle flow depends on, since it calls clear() after a successful
+  // settlement and the operator may well pick that company again.
+  function clearSelection() {
+    hiddenInput.value = "";
+    notifiedId = null;
+  }
+
   // Commits a selection (by keyboard or mouse) — fills both the visible
   // text field and the hidden id, fires onSelect, and closes the dropdown.
   function commit(item) {
     input.value = renderLabel(item);
-    hiddenInput.value = item.id;
-    if (onSelect) onSelect(item);
+    notifySelection(item);
     hide();
   }
 
@@ -215,7 +248,6 @@ function attachCombobox({ input, dropdown, hiddenInput, items, renderLabel, rend
 
   input.addEventListener("input", () => {
     clearTimeout(hideTimer);
-    hiddenInput.value = "";
     const filtered = filterItems(input.value);
     render(filtered);
 
@@ -223,8 +255,9 @@ function attachCombobox({ input, dropdown, hiddenInput, items, renderLabel, rend
       (item) => renderLabel(item).toLowerCase() === input.value.trim().toLowerCase()
     );
     if (exact) {
-      hiddenInput.value = exact.id;
-      if (onSelect) onSelect(exact);
+      notifySelection(exact);
+    } else {
+      clearSelection();
     }
   });
 
@@ -311,7 +344,7 @@ function attachCombobox({ input, dropdown, hiddenInput, items, renderLabel, rend
     },
     clear() {
       input.value = "";
-      hiddenInput.value = "";
+      clearSelection();
     },
   };
 }

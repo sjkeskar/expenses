@@ -2,14 +2,14 @@
 
 | Field | Value |
 |---|---|
-| Status | Open |
+| Status | Closed |
 | Severity | Medium |
 | Area | Operator / Admin UI: Settle Company Balance (`public/js/common.js` `attachCombobox`, `loadSettleBillsList` in `public/js/operator.js` / `public/js/admin.js`) |
 | Reported | 2026-10-16 |
 | Found by | E2E `accessibility/keyboard.spec.js` › M3d, which failed intermittently; confirmed deterministically by `billing/settle.spec.js` › F14 |
 | Assignee | — |
-| Resolution | — |
-| Verified by | — |
+| Resolution | `attachCombobox()` in `public/js/common.js` fires `onSelect` only when the selected item changes (`notifySelection`/`clearSelection`); `loadSettleBillsList()` in `public/js/operator.js` and `public/js/admin.js` carries ticked ids across reloads and drops stale responses with a load token |
+| Verified by | `billing/settle.spec.js` › F14 (now operator and admin), new F15 (late response for a previous company discarded) and F16 (same company re-picked after a settlement reloads); `accessibility/keyboard.spec.js` › M3d back to typing the full name; green in full `npm run test:e2e` runs on 2026-10-16 |
 
 ## Summary
 
@@ -74,4 +74,5 @@ Either or both:
 ## Linked tests
 
 - `e2e/specs/billing/settle.spec.js` › `F14: picking a company loads its bill list once, so ticked bills are never wiped`: `knownBug("BUG-019")`
-- `e2e/specs/accessibility/keyboard.spec.js` › M3d types a unique prefix (not the full name) to stay out of this bug's way; switch it back to the full name once this is fixed.
+- `e2e/specs/accessibility/keyboard.spec.js` › M3d: switched back to typing the full name now that this is fixed.
+- Follow-up: the fix's "re-picking the selected item no longer refreshes" trade-off led to BUG-020.

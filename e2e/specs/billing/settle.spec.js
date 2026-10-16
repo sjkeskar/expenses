@@ -158,33 +158,6 @@ test.describe("Settlement edge cases", () => {
     expect((await db().bill.findUnique({ where: { id: bill.id } })).status).toBe("pending");
   });
 
-  test("F14: picking a company loads its bill list once, so ticked bills are never wiped", async ({ loginAs, users, adminApi }) => {
-    knownBug("BUG-019");
-    const { company, category } = await adminApi.addCreditCategory();
-    await adminApi.createBill({ categoryId: category.id });
-    const ui = new BillingPage(await loginAs(users.op1));
-    // Hold back the 2nd /outstanding response (as on a busy LAN), so a
-    // duplicate load lands after the operator has already ticked a bill.
-    const loads = [];
-    await ui.page.route("**/api/companies/*/outstanding", async (route) => {
-      loads.push(route.request().url());
-      if (loads.length === 2) await new Promise((r) => setTimeout(r, 800));
-      await route.continue();
-    });
-
-    // Type the full company name, then Enter — the natural keyboard flow.
-    await ui.settleCompany.input.focus();
-    await ui.page.keyboard.type(company.name);
-    await ui.page.keyboard.press("Enter");
-    const box = ui.settleTable.locator(".settle-bill-checkbox");
-    await expect(box).toHaveCount(1);
-    await box.check();
-    await ui.page.waitForTimeout(1200);
-
-    await expect(box).toBeChecked();
-    expect(loads).toHaveLength(1);
-  });
-
   test("F13: an invalid mode or empty selection is rejected by the API", async ({ adminApi }) => {
     const { company, category } = await adminApi.addCreditCategory();
     const bill = await adminApi.createBill({ categoryId: category.id });
@@ -194,3 +167,103 @@ test.describe("Settlement edge cases", () => {
   });
 });
 
+// BUG-019 regressions: the settle list is loaded once per pick, late
+// responses for a previous company are discarded, and ticks survive reloads.
+for (const role of ["operator", "admin"]) {
+  test.describe(`Settle list loading as ${role}`, () => {
+    let ui;
+    test.beforeEach(async ({ loginAs }) => {
+      ui = new BillingPage(await loginAs(await createUser(role)));
+    });
+
+    test("F14: typing the full company name + Enter loads its bills once; ticks are never wiped", async ({ adminApi }) => {
+      const { company, category } = await adminApi.addCreditCategory();
+      await adminApi.createBill({ categoryId: category.id });
+      await ui.page.reload({ waitUntil: "networkidle" }); // pick up the new company
+      // Hold back any 2nd /outstanding response (as on a busy LAN), so a
+      // duplicate load would land after the operator has ticked a bill.
+      const loads = [];
+      await ui.page.route("**/api/companies/*/outstanding", async (route) => {
+        loads.push(route.request().url());
+        if (loads.length === 2) await new Promise((r) => setTimeout(r, 800));
+        await route.continue();
+      });
+
+      await ui.settleCompany.input.focus();
+      await ui.page.keyboard.type(company.name);
+      await ui.page.keyboard.press("Enter");
+      const box = ui.settleTable.locator(".settle-bill-checkbox");
+      await expect(box).toHaveCount(1);
+      await box.check();
+      await ui.page.waitForTimeout(1200);
+
+      await expect(box).toBeChecked();
+      expect(loads).toHaveLength(1);
+    });
+
+    test("F15: switching company quickly never shows the previous company's late response", async ({ adminApi }) => {
+      const a = await adminApi.addCreditCategory();
+      const b = await adminApi.addCreditCategory();
+      const billA = await adminApi.createBill({ categoryId: a.category.id });
+      const billB = await adminApi.createBill({ categoryId: b.category.id });
+      await ui.page.reload({ waitUntil: "networkidle" }); // pick up the new companies
+      // Company A's list answers slowly; B's answers at once.
+      await ui.page.route(`**/api/companies/${a.company.id}/outstanding`, async (route) => {
+        await new Promise((r) => setTimeout(r, 800));
+        await route.continue();
+      });
+
+      await ui.settleCompany.pick(a.company.name);
+      await ui.settleCompany.pick(b.company.name);
+      await expect(ui.settleCheckbox(billB.billNumber)).toHaveCount(1);
+      await ui.page.waitForTimeout(1200); // A's late response arrives now
+
+      await expect(ui.settleCheckbox(billB.billNumber)).toHaveCount(1);
+      await expect(ui.settleCheckbox(billA.billNumber)).toHaveCount(0);
+      await expect(ui.settleCompany.input).toHaveValue(b.company.name);
+    });
+
+    test("F16: after a settlement, picking the same company again reloads its remaining bills", async ({ adminApi }) => {
+      const { company, category } = await adminApi.addCreditCategory();
+      const first = await adminApi.createBill({ categoryId: category.id, originalAmount: 100 });
+      const second = await adminApi.createBill({ categoryId: category.id, originalAmount: 200 });
+      await ui.page.reload({ waitUntil: "networkidle" }); // pick up the new company
+
+      await ui.selectSettleCompany(company.name);
+      await ui.settleCheckbox(first.billNumber).check();
+      await ui.settleSubmit.click();
+      await expect(ui.settleMsg).toHaveClass(/success/);
+
+      await ui.selectSettleCompany(company.name);
+      await expect(ui.settleCheckbox(second.billNumber)).toHaveCount(1);
+      await expect(ui.settleCheckbox(first.billNumber)).toHaveCount(0);
+    });
+
+    test("F17: after a settlement fails on a bill paid elsewhere, the operator can get a fresh list", async ({ adminApi }) => {
+      knownBug("BUG-020");
+      const { company, category } = await adminApi.addCreditCategory();
+      const paidElsewhere = await adminApi.createBill({ categoryId: category.id, originalAmount: 100 });
+      const stillOwed = await adminApi.createBill({ categoryId: category.id, originalAmount: 200 });
+      await ui.page.reload({ waitUntil: "networkidle" });
+
+      await ui.selectSettleCompany(company.name);
+      await ui.settleCheckbox(paidElsewhere.billNumber).check();
+      await ui.settleCheckbox(stillOwed.billNumber).check();
+      await adminApi.pay(paidElsewhere.id, 100); // another operator takes the payment meanwhile
+      await ui.settleSubmit.click();
+      await expect(ui.settleMsg).toHaveText(`Bill ${paidElsewhere.billNumber} is not pending (already fully paid).`);
+
+      // Natural recovery: re-pick the company from its dropdown. Whether the page
+      // refreshed on its own after the error or refreshes on the re-pick, the
+      // operator must now see only what is still owed, with their tick kept.
+      const outstanding = ui.page.waitForResponse((r) => r.url().includes("/outstanding")).catch(() => null);
+      await ui.settleCompany.input.click();
+      await ui.settleCompany.item(company.name).click();
+      await Promise.race([outstanding, ui.page.waitForTimeout(1500)]);
+      await expect(ui.settleCheckbox(paidElsewhere.billNumber)).toHaveCount(0);
+      await expect(ui.settleCheckbox(stillOwed.billNumber)).toBeChecked();
+      await ui.settleSubmit.click();
+      await expect(ui.settleMsg).toHaveClass(/success/);
+    });
+  });
+}
