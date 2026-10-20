@@ -1,6 +1,6 @@
 // F1–F9: Settle Company Balance (hand-picked bills, each closed in full).
 // Every test gets its own credit category + company for isolation.
-const { test, expect, knownBug } = require("../../fixtures");
+const { test, expect } = require("../../fixtures");
 const { BillingPage } = require("../../pages/billing");
 const { createUser, findBillByNumber, db } = require("../../helpers/db");
 const { inr } = require("../../helpers/data");
@@ -240,7 +240,6 @@ for (const role of ["operator", "admin"]) {
     });
 
     test("F17: after a settlement fails on a bill paid elsewhere, the operator can get a fresh list", async ({ adminApi }) => {
-      knownBug("BUG-020");
       const { company, category } = await adminApi.addCreditCategory();
       const paidElsewhere = await adminApi.createBill({ categoryId: category.id, originalAmount: 100 });
       const stillOwed = await adminApi.createBill({ categoryId: category.id, originalAmount: 200 });
@@ -253,9 +252,9 @@ for (const role of ["operator", "admin"]) {
       await ui.settleSubmit.click();
       await expect(ui.settleMsg).toHaveText(`Bill ${paidElsewhere.billNumber} is not pending (already fully paid).`);
 
-      // Natural recovery: re-pick the company from its dropdown. Whether the page
-      // refreshed on its own after the error or refreshes on the re-pick, the
-      // operator must now see only what is still owed, with their tick kept.
+      // The page reloads the list after the error (BUG-020); the operator may
+      // also re-pick the company out of habit. Either way they must now see
+      // only what is still owed, with their tick kept.
       const outstanding = ui.page.waitForResponse((r) => r.url().includes("/outstanding")).catch(() => null);
       await ui.settleCompany.input.click();
       await ui.settleCompany.item(company.name).click();

@@ -2,14 +2,14 @@
 
 | Field | Value |
 |---|---|
-| Status | Open |
+| Status | Closed |
 | Severity | Low |
 | Area | Operator / Admin UI: Settle Company Balance (`public/js/common.js` `attachCombobox`, settle click handler in `public/js/operator.js` / `public/js/admin.js`) |
 | Reported | 2026-10-16 |
 | Found by | Re-test after the BUG-019 fix; confirmed by E2E `billing/settle.spec.js` › F17 (operator and admin) |
 | Assignee | — |
-| Resolution | — |
-| Verified by | — |
+| Resolution | The settle click handler's `catch` in `public/js/operator.js` and `public/js/admin.js` now calls `loadSettleBillsList(companyId)` after showing the error, so the list drops bills that are no longer pending and keeps the ticks on those that are (via the BUG-019 tick carry-over). `attachCombobox` is unchanged, so BUG-019's de-duplication stays intact |
+| Verified by | `billing/settle.spec.js` › F17 (operator and admin), 3/3 repeats; full `npm run test:e2e` green on 2026-10-21 |
 
 ## Summary
 
@@ -73,4 +73,4 @@ the list.
 
 ## Linked tests
 
-- `e2e/specs/billing/settle.spec.js` › `F17: after a settlement fails on a bill paid elsewhere, the operator can get a fresh list` (operator and admin): `knownBug("BUG-020")`. The test passes with either fix: an automatic reload after the error, or re-picking refreshing the list.
+- `e2e/specs/billing/settle.spec.js` › `F17: after a settlement fails on a bill paid elsewhere, the operator can get a fresh list` (operator and admin): now a normal regression test (its `knownBug` marker was removed when this was fixed).

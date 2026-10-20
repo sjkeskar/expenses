@@ -610,6 +610,15 @@ settleSubmitBtn.addEventListener("click", async () => {
       await loadBills();
     } catch (err) {
       showMessage(msg, err.message, true);
+      // A settlement is all-or-nothing, and the usual reason it is refused
+      // is that the list has gone stale: a ticked bill was paid elsewhere
+      // meanwhile ("Bill X is not pending"). Reload the list so it shows
+      // what is still owed; loadSettleBillsList keeps the ticks on bills
+      // that are still pending and drops the rest, so the operator can
+      // simply press Settle again. Re-picking the company can't do this
+      // since BUG-019 (it no longer reloads an unchanged selection) — see
+      // bugs/Closed/BUG-020.
+      await loadSettleBillsList(companyId);
     }
   });
 });
