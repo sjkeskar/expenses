@@ -1,5 +1,7 @@
-// Shared helpers used by login.js / operator.js / admin.js / developer.js.
-// No build step, no framework — plain functions attached to `window`.
+// Shared helpers used by every page script. No build step, no framework —
+// plain functions attached to `window`. Feature UI shared between role
+// pages lives alongside: billing.js (operator + admin) and analytics.js
+// (admin + accountant).
 
 async function api(path, options = {}) {
   const res = await fetch(`/api${path}`, {
@@ -40,12 +42,61 @@ async function guardPage(expectedRole) {
   }
 }
 
+// Start-up shared by every role page: checks the session, then wires the
+// header (user name, session reminder banner, logout, change password).
+// Returns the user, or null when guardPage is redirecting away.
+async function initRolePage(role) {
+  const user = await guardPage(role);
+  if (!user) return null;
+  document.getElementById("user-name").textContent = `${user.name} (${role})`;
+
+  const reminder = sessionStorage.getItem("sessionReminder");
+  if (reminder) {
+    const banner = document.getElementById("reminder");
+    banner.textContent = reminder;
+    banner.style.display = "block";
+  }
+
+  document.getElementById("logout-btn").addEventListener("click", logout);
+  setupChangePasswordModal();
+  return user;
+}
+
 async function logout() {
   try {
     await api("/auth/logout", { method: "POST" });
   } finally {
     window.location.href = "login.html";
   }
+}
+
+// Once a bill is refunded, balance is force-zeroed by the refund itself
+// (not reached through normal payment), so "netAmount - balance" stops
+// being a valid way to read off "amount collected" — refundedAmount is
+// the snapshot taken at refund time for exactly this reason.
+function getCollectedAmount(bill) {
+  return bill.status === "refunded" ? Number(bill.refundedAmount) : Number(bill.netAmount) - Number(bill.balance);
+}
+
+function statusLabel(status) {
+  if (status === "fully_paid") return "Fully Paid";
+  if (status === "refunded") return "Refunded";
+  return "Pending";
+}
+
+// Table rows are built as arrays of cells so the same row can feed both
+// innerHTML and a PDF export. A cell is a plain value (escaped for HTML,
+// used as-is in a PDF) or { html, text } when the two must differ.
+function tableRowHtml(cells) {
+  return `<tr>${cells.map((c) => `<td>${typeof c === "object" ? c.html : escapeHtml(c)}</td>`).join("")}</tr>`;
+}
+
+function cellText(cell) {
+  return typeof cell === "object" ? cell.text : cell;
+}
+
+function statusCell(status) {
+  return { html: `<span class="badge ${escapeHtml(status)}">${statusLabel(status)}</span>`, text: statusLabel(status) };
 }
 
 function formatCurrency(value) {
@@ -353,6 +404,30 @@ function attachCombobox({ input, dropdown, hiddenInput, items, renderLabel, rend
 // per the HTML spec, for implicit submission with Enter too. The fallback
 // finds the form's default submit button, so submitOnce below can never
 // trip over a null submitter.
+// The lookup lists behind the app's comboboxes. Each list feeds every
+// combobox registered for it (via comboboxById's `lookup`), so reloading a
+// list — e.g. clients after a bill adds one — refreshes all its pickers.
+const lookupComboboxes = { clients: [], locations: [], categories: [], companies: [] };
+
+async function loadLookup(list) {
+  const data = await api(`/${list}`); // responds { [list]: [...] }
+  lookupComboboxes[list].forEach((combobox) => combobox.updateItems(data[list]));
+}
+
+// attachCombobox for the standard markup: #{prefix}-input, #{prefix}-dropdown
+// and the hidden #{prefix}-id. `lookup` names the list that feeds it, if any.
+function comboboxById(prefix, { lookup, ...options }) {
+  const combobox = attachCombobox({
+    input: document.getElementById(`${prefix}-input`),
+    dropdown: document.getElementById(`${prefix}-dropdown`),
+    hiddenInput: document.getElementById(`${prefix}-id`),
+    items: [],
+    ...options,
+  });
+  if (lookup) lookupComboboxes[lookup].push(combobox);
+  return combobox;
+}
+
 function submitButtonFor(e) {
   return (
     e.submitter ||

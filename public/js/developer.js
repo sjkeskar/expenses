@@ -1,20 +1,9 @@
 let currentUserId = null;
 
 async function init() {
-  const user = await guardPage("developer");
+  const user = await initRolePage("developer");
   if (!user) return;
   currentUserId = user.id;
-  document.getElementById("user-name").textContent = `${user.name} (developer)`;
-
-  const reminder = sessionStorage.getItem("sessionReminder");
-  if (reminder) {
-    const banner = document.getElementById("reminder");
-    banner.textContent = reminder;
-    banner.style.display = "block";
-  }
-
-  document.getElementById("logout-btn").addEventListener("click", logout);
-  setupChangePasswordModal();
   await loadUsers();
 }
 
