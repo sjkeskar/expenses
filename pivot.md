@@ -1,493 +1,1029 @@
-# Pivot: Payment Tracking System → Laboratory Management System (POS module)
+# Pivot: Payment Tracking System → Laboratory Management System
 
-Status: **planning only, no code changed yet.** Written 2026-10-24 against
-`develop` @ `b15f0c8`.
+Status: **planning, revision 3.5 (2026-10-26).** Rounds 1 and 2 were reviewed in
+`pivot_review.txt`; rounds 3–7 arrived in chat. Every answer is applied below and
+traced in the decision log (§14). Remaining questions are in §15.
 
-What we've built so far becomes the **POS / front-desk module** of a lab
-system. On top of the money handling we already have, a lab bill needs:
-
-1. **The tests requested** on the bill, each with the time it was requested.
-2. **When the patient should expect the final report.**
-3. **Whether the patient needs to come back (or came back) to give a sample later**
-   (e.g. fasting blood tomorrow morning, urine today).
-4. A large **test catalog** that keeps growing.
-5. A **Quotation** screen used before a bill is generated.
+What we built so far (a payment tracking POS) was demoed, and the brief is now a
+full **Laboratory Management System**. **The app is not live**: there is no production
+data, so renames and schema changes can be done cleanly, with no data migration.
 
 ---
 
-## 1. Guiding principle: keep the money layer untouched
+## 1. Phase 1 scope
 
-All the money logic works at the **bill level**: `Bill.originalAmount / discountAmount
-/ netAmount / balance`, transactions, extra discount at payment time, company
-settlement, whole-bill refund, reassignment and all 6 analytics reports. It is
-tested, concurrency-safe and works in paise.
+Phase 1 delivers a solid **test catalog, quotation and billing system**. Later phases
+cover what happens after billing: sample processing, results, reports and the TAT engine.
 
-The plan therefore **adds line items under the bill but leaves the bill-level totals as they are**:
-
-- `Bill.originalAmount` stops being typed in by the operator. The server computes it
-  as `SUM(billItems.price)`.
-- Everything that reads bill totals (transactions.js, companies.js settle, the refund
-  route, analytics.js) keeps working **with no change**.
-
-This is what keeps the backend change small. The new work is additive:
-new tables, new routes, and one changed route (`POST /api/bills`).
+| In Phase 1 | Later phases (§10) |
+|---|---|
+| Lab settings; role hierarchy (lead pathologist → pathologist → technician); lead hand-over | Lab calendar (open / closed / half days, machine availability) and its approval rules |
+| Branches, collection centres (each linked to a processing branch), home visits (per-location minimum charge) | Machine availability, downtime, calibration (uses the calendar) |
+| Patients with required demographics | TAT engine (computed report times, §10.3 scenarios) |
+| Referring doctors (added by technicians, approved by the lead) | Pathologist availability schedules |
+| Payers: self or panel; **panel price lists (TPA / insurer) and scheduled company camps** | Sample processing workflow, result entry, **report generation** |
+| Catalog: **tests, profiles (with their component tests), services** (e.g. home visit), each test's **machine steps**; entered in a grid, approved by the lead | Report holds **enforced** (Phase 1 records and shows them, §4.2) |
+| Machine types and machines registry (for the catalog; availability comes later) | |
+| Quotations: 48 h validity, reserved prices, thermal print (Zebra GT820), barcode | Sample tube barcode labels on the same GT820 (§10.4) |
+| Bills, payments, panel settlement, a manually entered "report expected by" per bill | |
+| **Cancelling a single test with partial refund** (needed from day 1) | |
+| **Approvals**: every discount, cancellation and new doctor is approved by a pathologist or the lead | |
+| Sample collection now or on a revisit, recording the revisit | |
+| Day Sheet (replaces My Bills), A4 printing, document verification | |
+| Analytics adapted to the new model | |
 
 ---
 
-## 2. Naming changes
+## 2. Guiding principle: change the money layer once, deliberately
 
-| Today | Proposed | Where it changes | Notes |
+Cancelling one test and refunding part of a bill is needed from day 1, so the money
+layer changes (§4.10). The rules that stay:
+
+- All amounts are integer paise on the server. The client only displays them.
+- Every write that changes a bill's money locks the bill row first (`SELECT … FOR UPDATE`),
+  as payments, settlement and refunds already do (BUG-011).
+- Bill-level totals stay the thing every report reads:
+  `originalAmount / discountAmount / netAmount / balance`.
+
+Totals are now **derived from line items and money movements**, never typed in.
+**Approvals don't move money**: a discount or cancellation takes effect immediately, and
+its approval only clears a report hold (§4.2).
+
+---
+
+## 3. Naming, roles and organisation
+
+### 3.1 Renames (full depth: schema, API, code, UI)
+
+| Today | Becomes | Notes |
+|---|---|---|
+| Payment Tracking System | Laboratory Management System | Everywhere: titles, `package.json`, scripts, docs. DB `payment_tracking` → `lab_management`. |
+| Client | **Patient** | Gains required fields (§4.4). |
+| Operator (role) | **Technician** | |
+| Admin (role) | **Lead pathologist** takes over its duties | Branches, panels, rates, reassignment, analytics, machines, approvals. |
+| Category | **Removed.** Replaced by **Referral** + **Payer** (§4.5) | |
+| Company | **Panel** (corporate, TPA, insurer), with its own rates | Now the *payer* on a bill. |
+| Location | **Branch** or **Collection Centre** | Each has its own location code (bill-number prefix). |
+| My Bills | **Day Sheet** (§6.7) | |
+
+Since nothing is live, migrations are **squashed into one fresh `init` migration** (as
+`scripts/consolidate-migrations.ps1` did before). Raw SQL in `analytics.js` is updated in
+the same pass.
+
+### 3.2 Roles
+
+```
+developer          installation and support only: first-run setup (lab settings + the first lead's account).
+                   Creates no other accounts. Can re-appoint the lead only after 7 days of lead
+                   inactivity (§3.3).
+lead_pathologist   exactly one; everything a pathologist can do, plus: the ONLY role that creates and manages
+                   user accounts (pathologist, technician, accountant); applies catalog changes directly and
+                   approves others'; approves doctors; manages branches, panels/rates, machines, lab
+                   name/contact; reassignment; analytics; hand-over
+  └ pathologist    many, including visiting / part-time staff. Can do everything at reception a technician can
+                   (covers when technicians are on leave), approves discounts and cancellations (own included), proposes catalog
+                   changes (applied only after the lead approves), approves reports in a later phase
+      └ technician data entry: patients, quotations, bills, payments, samples; proposes catalog changes and doctors
+accountant         read-only; tallies all money daily, weekly and monthly for audit: analytics + PDF export,
+                   any Day Sheet (§6.10)
+```
+
+**Account management is the lead's.** Creating accounts and managing them afterwards
+(deactivation, password reset) move from the developer page to the lead. The developer
+creates only the first lead during first-run setup.
+
+`admin` and `operator` are removed from the `Role` enum. Promote Operator goes away.
+Reassign Operator becomes **Reassign Technician** (lead only), with the same append-only audit table.
+
+### 3.3 Lead pathologist hand-over
+
+- **Exactly one lead.** A partial unique index allows only one active `lead_pathologist`.
+- The **developer appoints the first lead** during first-run setup (§3.4).
+- After that, **the lead hands over to one of the current pathologists**. The confirm dialog
+  says plainly: *"You are making X the lead pathologist. Your own account will become a
+  pathologist account."* In one transaction: X becomes lead, the current lead becomes
+  pathologist, and a `LeadTerm` history row closes / opens.
+- A former ("retired") lead **keeps signing in, with exactly a pathologist's rights**. Their
+  history (approvals, terms as lead) stays attributed to them.
+- **If the lead is unreachable** (round 4): once the lead hasn't signed in for **7 days**,
+  the developer may appoint one of the current pathologists as lead. It's the same
+  transaction as a hand-over: the old lead becomes a pathologist, and the `LeadTerm` row
+  records that the developer made the appointment and why. Before 7 days have passed, the
+  server refuses it.
+
+### 3.4 Lab settings
+
+A single-row `LabSettings` table: **lab name, contact details (phone, email, address)**.
+The developer fills it in on first run, together with appointing the first lead. A
+first-run screen on the developer page appears while `LabSettings` is empty. After that,
+**only the lead pathologist** can change name and contact. These values head every print (§7).
+
+---
+
+## 4. Data model (prisma/schema.prisma)
+
+Sketches show intent, not final syntax. UUID keys, `timestamptz` timestamps and soft
+deletion (`isActive`) everywhere history refers to a row.
+
+### 4.1 Users
+
+`Role` enum: `developer | lead_pathologist | pathologist | technician | accountant`.
+`lastLoginAt` is set on every sign-in and drives the 7-day rule (§3.3).
+`LeadTerm { userId, startedAt, endedAt?, appointedById, reason: handover | inactive_lead }`
+records who was lead, when, and how they were appointed.
+
+### 4.2 Approvals and report holds (one table, one queue)
+
+Two kinds of approval exist. One table and one queue screen handle both:
+
+| Subject | Takes effect | Who approves | While pending or rejected |
 |---|---|---|---|
-| "Payment Tracking System" | "Laboratory Management System" (page headers can say "… — POS") | 5 HTML `<title>`/`<h1>`, `package.json` name/description, `server.js` log line, README / REFERENCE / SETUP_GUIDE, `scripts/*.sql/.bat/.ps1`, `.env.example`, `playwright.config.js`, `bugs/README.md` | Rename the DB `payment_tracking` → `lms`? **Only if there's no live install**: it touches every `.env` and the backup script. |
-| Client | **Patient** | UI labels, plus schema/API (see 2.1) | Biggest rename. |
-| Bill | Bill (keep) | — | Labs say "bill" too. |
-| "Original amount (MRP)" field | removed | Create Bill form | Becomes the computed sum of test prices. |
-| Operator (role) | Keep the `operator` enum value. UI label TBD ("Front Desk"?) | UI labels only | Changing the enum means a migration plus every `requireRole(...)`; not worth it. |
-| Category / Company | Keep the models. UI labels TBD (e.g. "Billing Type" / "Panel / Corporate") | UI labels only | In labs a "credit company" is normally a corporate tie-up, TPA/insurer or referring hospital. Same behavior, different words. |
-| Location | Keep. UI label maybe "Branch / Collection Centre" | UI labels only | The 2-digit code and bill-number prefix are unchanged. |
-
-### 2.1 How deep the Client → Patient rename goes
-
-Recommendation: **a full rename (Prisma model, DB table/columns, API paths, JS
-names, element ids), if there is no production data yet.** All the new code
-(bill items, samples, quotations, report ETA) is about patients. Code that says
-`client` while the UI says "Patient" would cause confusion for as long as the
-codebase exists, and the rename gets more expensive with every feature added on top.
-
-How to do it safely:
-
-- `prisma migrate dev` treats a model/table rename as **drop + create**, which
-  **deletes the data**. The migration must be edited by hand to use
-  `ALTER TABLE "clients" RENAME TO "patients"` and
-  `ALTER TABLE "bills" RENAME COLUMN "clientId" TO "patientId"` (same for
-  `transactions`), plus renaming the FK constraints and indexes.
-- Raw SQL in `src/routes/analytics.js` uses `"clients"` and `"clientId"` directly;
-  each of those queries must be updated by hand (they don't fail at compile time).
-- API: `/api/clients` → `/api/patients`, `/api/analytics/client-outstanding|client-daily|client-ledger`
-  → `patient-*`. The body field `clientId/clientName` → `patientId/patientName`.
-- Frontend: element ids `bill-client-*`, `ledger-client-*`, table ids
-  `client-outstanding-table`, etc. The e2e page objects use these ids, so they
-  move together (see §9).
-
-If a live install already holds real data, the fallback is a rename at the code
-level only: rename the Prisma model to `Patient` but keep `@@map("clients")` and
-`@map("clientId")`, so the DB needs no migration. Raw SQL then still says
-`clients`, which is ugly but safe.
-
-### 2.2 Patient fields (currently name only, by an earlier decision)
-
-A lab almost always needs **age, sex and phone** on the patient: age and sex for
-reference ranges on the report, phone for report-ready messages. Often a
-**referring doctor** is needed too (printed as "Ref. by Dr. …").
-This revisits the earlier "clients are name only" decision, so it is listed under
-open questions (§11). If accepted, these become nullable columns on `patients`
-plus optional fields on the bill form. Find-or-create by name gets weaker,
-because two patients can share a name. The patient combobox would then need to
-show age/sex/phone in its sub-line (the `renderSub` option already exists) to
-tell them apart.
-
----
-
-## 3. Data model changes (prisma/schema.prisma)
-
-New model names use the `Lab` prefix where a bare name would clash with
-something we already have (e.g. "Test" vs. the e2e tests).
-
-### 3.1 `LabTest`: the test catalog (admin-managed, will grow large)
+| Catalog change: add / edit / retire a test, profile, service | **on approval** | lead | nothing changes in the catalog |
+| Referring doctor (new) | **immediately**: usable on bills | lead | **report hold** on every bill naming that doctor |
+| Patient correction (a mandatory field) | **on approval** (round 7) | pathologist or lead | nothing changes: the patient's current details stand |
+| Bill discount (any discount, even 100%; at billing or at payment time) | **immediately** | pathologist or lead, **own included** | **report hold** on the bill |
+| Test cancellation (and the refund it caused) | **immediately** | pathologist or lead, **own included** | **report hold** on the bill |
+| Calendar day (later phase) | on approval | another pathologist; the lead's apply directly | — |
 
 ```prisma
-model LabTest {
-  id          String   @id @default(uuid())
-  code        String   @unique          // short code for fast search, e.g. "CBC", "LIPID"
-  name        String                     // "Complete Blood Count"
-  price       Decimal  @db.Decimal(12, 2) // current MRP; snapshotted onto items
-  tatHours    Int                        // turnaround time, used to compute report ETA
-  sampleType  String?                    // "Blood", "Urine", ... (enum later if useful)
-  isActive    Boolean  @default(true)    // soft delete, same as Location/Category
-  createdAt   DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
-
-  billItems      BillItem[]
-  quotationItems QuotationItem[]
-  @@map("lab_tests")
+model Approval {
+  id            String   @id @default(uuid())
+  subjectType   ApprovalSubject  // catalog_change | referring_doctor | patient_correction | bill_discount | bill_cancellation | (later) calendar_day
+  subjectId     String?          // the doctor / bill / cancellation; null for a catalog "add"
+  billId        String?          // set for bill holds, so a bill's holds are one query
+  payload       Json?            // catalog: proposed values. discount: old → new amount. cancellation: items, refund.
+  status        ApprovalStatus   // pending | approved | rejected
+  requestedById String
+  requestedAt   DateTime @default(now()) @db.Timestamptz(3)
+  reviewedById  String?
+  reviewedAt    DateTime? @db.Timestamptz(3)
+  reviewNote    String?
 }
 ```
 
-- **Price and TAT are snapshotted** onto every bill/quote item, so changing the
-  catalog price never rewrites an old bill. This is also why a price-history table isn't needed yet.
-- Panels/profiles (e.g. "Lipid Profile" = 5 tests sold together) are **not modelled
-  in v1**. A panel is simply a catalog entry with its own price. If the lab later
-  needs to know which tests make up a panel (for report generation), add a
-  `LabTestComponent` join table. That doesn't affect POS.
+- **Report holds**: a bill's report can be generated only when it has no pending or rejected
+  discount/cancellation approvals and its referring doctor (if any) is approved. **Phase 1
+  records and displays holds** (a "Report on hold" tag listing the reasons, on the bill and the
+  Day Sheet). Report generation itself, which enforces them, comes later.
+- The discussion with the patient happens offline. The approval records that it took place.
+- A catalog approval applies its payload in the **same DB transaction** that marks it approved.
+- **Self-approval** (round 4): a discount or cancellation entered by a pathologist or the
+  lead is recorded as approved by them when it's entered (`reviewedById = requestedById`,
+  flagged self-approved), so no second approval is needed. One entered by a technician waits
+  for a pathologist or the lead. The same applies to patient corrections: a technician's waits
+  for a pathologist, while a pathologist's or the lead's applies directly (assumed, by analogy
+  with discounts; say if not). Catalog changes and doctors still need the lead.
+- **Rejections** are rare, because everything is discussed offline first (round 4):
+  - **Discount rejected:** the discount is reverted in the same transaction (bill row locked),
+    so the bill shows the full amount due. The report stays held **until the full amount is
+    paid**, and the hold then lifts on its own.
+  - **Cancellation rejected:** the refund has already been given, so the hold stays until the
+    lead resolves it with a note, e.g. by re-billing the test.
+  - **Doctor rejected:** the doctor is dropped from every bill naming them (the referral stays
+    "doctor", with no doctor named). That clears the hold, and each bill's history records the change.
 
-### 3.2 `BillItem`: the tests on a bill
+### 4.3 Locations: branches, collection centres, home visits
 
 ```prisma
-enum SampleStatus {
-  collected   // sample taken at the bill visit, or at a later revisit
-  pending     // patient must come back: see sampleDueAt
+enum LocationType { branch  collection_centre }
+
+model Location {
+  // existing: id, name, locationCode (2 digits, own code per branch/centre), isActive
+  type             LocationType
+  address          String           // printed on quotations and bills
+  phone            String?
+  processingBranchId String?        // required for a collection centre: where its samples are processed
+  homeVisitCharge    Decimal?       // minimum home-visit charge for visits from this location
+}
+```
+
+Each bill records where the patient was served. `collectionMode` is `at_location` or
+`home_visit`, with `locationId` = the branch or centre handling it. For a home visit:
+
+- **The visit address is optional.** Some patients don't want it stored.
+- **The home-visit charge varies by branch/centre** (round 4). Each location has a fixed
+  `homeVisitCharge`. Choosing "home visit" adds a home-visit line (a catalog service item)
+  priced at that amount. The technician may **raise** it but never lower it, and the server
+  enforces the minimum. Any reduction can only come through the bill discount, which goes
+  through approval.
+
+### 4.4 Patients
+
+| Field | Rule |
+|---|---|
+| `name` | required |
+| `dateOfBirth` + `dobIsApproximate` | required. Typing an age stores an estimated DOB flagged approximate, so the current age is always computed. A bill shows the age **as of the bill date, computed from the current DOB**, so a corrected DOB shows on old bills too. |
+| `sex` | required: male / female / other |
+| `phone` | required |
+| `patientNumber` | **derived from the mandatory fields** (round 5), **re-derived whenever one is corrected** (round 6): see below. All numeric. Printed on **bills and reports** only (round 6). |
+
+- More fields will follow after feedback. Fields added later are **not** part of the patient
+  number, so the number stays derivable from the original mandatory four.
+- No find-or-create by name. The picker searches name, phone or patient number and shows
+  `name · age/sex · phone`. "New patient" opens a short form.
+
+**Patient number derivation.** It's for **catching duplicates and faster searches** (round 6).
+The number is one anyone holding the mandatory fields can work out again, rather than an
+arbitrary id.
+
+1. **Normalise** the fields:
+   - name: upper-case, single spaces, punctuation dropped
+   - date of birth: an approximate DOB counts as its birth year only
+   - sex: M / F / O
+   - phone: last 10 digits
+2. **Hash** them together (SHA-256) and read the result as a number: **12 digits plus one check
+   digit** (Luhn), so a mistyped number is caught. That's 13 digits, no letters.
+3. **Same details → same number**, at any branch, any time. Registering someone who already
+   exists produces their existing number, and the form opens the existing patient instead.
+4. **Duplicates can't be entered** (round 7). Two records with the same full name, age, sex
+   and phone are the same person, so they're never allowed. The database enforces this, not
+   just the form: each patient stores an `identityKey` (the normalised fields from step 1)
+   with a **unique index**, so even two technicians registering the same person at the same
+   moment get one record. There is no merge feature, because there is nothing to merge.
+5. **One-way:** the number reveals nothing about the patient (no phone digits on documents).
+   It can only be recomputed by someone who already has their details.
+
+Limits worth knowing:
+
+- **A number clash isn't a duplicate.** Two *different* people (different details) could
+  still hash to the same 12 digits. At ~100,000 patients the chance of any such clash is
+  about 1 in 200. The server detects it (same number, different `identityKey`) and gives the
+  newer patient the next free number. That one patient's number is then not derivable. Old
+  numbers kept as aliases count as taken.
+- **What the unique index can't see:** the same person entered with different details. A
+  spelling variant ("Mohd" / "Mohammed"), or an age given a year later (a different birth
+  year), produces different normalised fields. To stop these at the counter, the form keeps
+  the **name + phone look-alike warning**: entering a phone that already belongs to a
+  patient with a similar name shows that patient first. The technician picks them, or
+  confirms it's a different person (e.g. a family member sharing the phone).
+
+**Correcting a mandatory field** (rounds 6–7). A technician **proposes** the correction,
+which becomes a `patient_correction` approval. **Nothing changes until a pathologist (or
+the lead) approves it**. Until then the current details stay on everything. A pathologist's
+or the lead's own correction applies directly (§4.2). There's one pending correction per
+patient at a time. Approval runs as one transaction:
+
+1. The patient row is updated and the number is **re-derived** from the corrected details.
+2. **Historic bills and reports show the corrected details and the new number.** Bills
+   reference the patient and never copy name, sex, phone or DOB, and the age on a bill is
+   computed from the current DOB as of the bill date. The quotation's free-text name/phone,
+   from before a patient existed, is the one exception: it's what was quoted.
+3. **The old number becomes an alias**
+   (`PatientNumberAlias { patientId, number, retiredAt }`). Searching or typing an old number
+   still finds the patient, because printouts already handed out can't be updated.
+4. **Every change is audited** (`PatientChange { patientId, field, oldValue, newValue,
+   changedById, approvedById, changedAt }`). The Verify screen shows "patient details corrected on <date>"
+   when an old printout no longer matches the current details, so a genuine old bill isn't
+   mistaken for a forgery.
+5. **A correction that would make the patient identical to another patient** (same
+   `identityKey`) is refused: duplicates are never allowed (round 7). It's checked both
+   when the correction is proposed and again at approval, since another patient could have
+   been registered or corrected in between. The screen shows the other patient.
+
+### 4.5 Referral and payer (replaces Category / Company)
+
+Who referred the patient and who pays are separate questions. Every bill answers both:
+
+| | Options | On the bill |
+|---|---|---|
+| **Referral** | `walk_in` · `doctor` | `referralType`, `referringDoctorId?` (**optional**, even for a doctor referral) |
+| **Payer** | `self` · `panel` (corporate / TPA / insurer) | `payerType`, `panelId?` (required when `panel`), `campId?` (a scheduled camp of that panel) |
+
+**Referring doctors.** `ReferringDoctor { name, phone, clinic/hospital, status: pending | approved | rejected, isActive }`.
+- Technicians add doctors on a **separate Doctors screen**, not from the bill form. A new
+  doctor is pending until the lead approves.
+- Bills can name a pending doctor. That bill's report is held until the doctor is approved (§4.2).
+
+**Panels, price lists and camps.** `Panel` is today's `Company`: name, type, contact,
+`isActive`. Special rates come in two forms, and both use the same `PriceList` shape:
+
+- **A standing price list on a panel** (round 5): a TPA or insurer can have its own price
+  catalog. It applies to every bill that panel pays for, with no end date.
+- **A camp** (round 4): its own record, a company-led event scheduled for a period, with a
+  price list that applies only inside that period.
+
+```prisma
+model PriceList {
+  discountPercent  Decimal?          // % off catalog price for every item not listed
+  items            PriceListItem[]   // { catalogItemId, price }: custom price per test/profile
+}
+
+model Panel { …, priceListId? }       // standing rates, e.g. an insurer's own catalog
+
+model Camp {
+  panelId                             // the company running the camp
+  name, venue?                        // e.g. "Acme health camp", "Acme plant, Pune"
+  locationId                          // the branch/centre conducting it
+  startsAt, endsAt                    // the scheduled period
+  priceListId                         // the camp's rates, applied only inside the period
+  createdById                         // the lead
+}
+```
+
+- Only the lead edits price lists and camps.
+- **Rates are prices, not discounts**, so bills priced by them need no per-bill approval. An
+  extra bill discount on top still does.
+- Editing a standing price list affects new quotes and bills only. Existing ones keep their
+  snapshotted prices, and an open quote keeps its reserved price (§4.9).
+
+**Panel settlement** (today's company settlement) carries over as-is: pick the panel, tick
+the bills to close.
+
+### 4.6 Catalog: tests, profiles, services; machines
+
+~150 items. They load once, and search runs in the browser.
+
+```prisma
+enum CatalogKind { test  profile  service }
+
+model CatalogItem {                 // "LabTest" in revision 2
+  code, name, kind, price
+  department?, sampleType?, container?, instructions?   // tests/profiles; services have none
+  status        active | retired    // proposals live in Approval until approved
+  draws         CatalogDraw[]       // sample draws, in order: ≥1 for tests; none for profiles or services
+  machineSteps  CatalogMachineStep[] // tests: which machine types, in order (for TAT later)
+  components    ProfileComponent[]  // profiles: the tests it covers
+}
+
+model CatalogDraw        { itemId, sequence, label }              // "Single"; GTT: "Fasting", "1 h", "2 h"
+model CatalogMachineStep { itemId, sequence, machineTypeId }      // same sequence number = parallel
+model ProfileComponent   { profileId, testId }                    // e.g. Lipid Profile → 5 tests
+
+model MachineType { name }                                        // "Haematology analyser"
+model Machine     { name, machineTypeId, branchId, isActive }     // a physical unit at a processing branch
+```
+
+- **Grid columns (catalog entry):** code, name, kind, department, sample type, container,
+  price, draws (tests only), **machines required** (review R2 Q10), patient instructions; for profiles,
+  **component tests**.
+- Every addition or edit by a technician or pathologist is an `Approval` (catalog_change),
+  applied when the lead approves. The lead's own changes apply directly.
+- Bills and quotes snapshot code, name and price, so old documents never change.
+- **A test lives on its own and inside profiles** (round 4). It's always a standalone catalog
+  item with its own price, and any number of profiles can include it (`ProfileComponent`
+  is many-to-many).
+- **Overlap warning** (round 4): if a quote or bill holds a profile *and* one of its tests
+  separately, or two profiles sharing a test, the form warns before saving, since the test
+  would be billed twice.
+- **Profiles are cancelled whole** (round 4), never one component at a time.
+- **Sample draws are test-level only** (round 5). Profiles have no draws of their own, and
+  nothing is derived or merged for them. A profile line on a bill carries each of its
+  tests' draws separately. When a sample is taken, the technician marks exactly which tests
+  it covers (one, several, or all but one), and the rest stay pending for a revisit.
+- A test requires a **machine type**, not a particular unit (confirmed in round 4). Any
+  machine of that type at the processing branch can run it, which lets a backup take over
+  (T4). Machines belong to branches, and steps sharing a sequence number run in parallel
+  (both confirmed). Availability is calendar work, in a later phase.
+
+### 4.7 Pricing (one function)
+
+```
+price(item, payer, camp, location, at) =
+  home-visit line:                          max(location.homeVisitCharge, amount entered by the technician)
+  billed under a camp of that panel,
+    with `at` inside its scheduled period:  from the camp's price list
+  payer is a panel with a standing list:    from the panel's price list
+  otherwise:                                catalog price
+
+from a price list = its custom price for the item if listed,
+                    otherwise catalog price − its discountPercent (or catalog price if it has none)
+```
+
+A running camp beats the panel's standing list.
+
+The quote and bill forms both call it. Each line snapshots the result, so the quoted or
+billed price never changes later. Outside its scheduled period a camp's rates don't apply,
+and the server refuses to bill under a camp that isn't running.
+
+### 4.8 Bills, line items, samples
+
+```prisma
+model Bill {
+  // kept: billNumber ({locationCode}{YY}{MM}{seq}), createdBy, createdAt, location, reassignments
+  patientId                              // patient details are read live, never copied (§4.4)
+  referralType, referringDoctorId?, payerType, panelId?, campId?
+  collectionMode, homeVisitAddress?
+  quotationId?          @unique
+  expectedReportAt      DateTime?        // one per bill, entered manually in Phase 1
+  verificationCode      String @unique   // random; printed as a barcode (§7.3)
+  status                pending | fully_paid | cancelled
+  items BillItem[]
 }
 
 model BillItem {
-  id         String  @id @default(uuid())
-  billId     String
-  bill       Bill    @relation(fields: [billId], references: [id])
-  labTestId  String
-  labTest    LabTest @relation(fields: [labTestId], references: [id])
+  billId, catalogItemId, code, name, kind, price     // snapshots
+  status            active | cancelled
+  processingStatus  not_started | in_progress | completed   // set by the processing phase; always not_started in Phase 1
+  cancellationId?
+  collections       SampleCollection[]               // one per draw of each test (a profile: each component test's draws)
+}
 
-  // Snapshots taken at bill time (see 3.1)
-  testName   String
-  testCode   String
-  price      Decimal @db.Decimal(12, 2)
-  tatHours   Int
-
-  requestedAt       DateTime @db.Timestamptz(3)  // = bill timestamp (honours backdating)
-
-  sampleStatus      SampleStatus
-  sampleDueAt       DateTime? @db.Timestamptz(3) // when the revisit is expected (pending only)
-  sampleCollectedAt DateTime? @db.Timestamptz(3)
-  sampleCollectedById String?
-  sampleCollectedBy User?    @relation("SampleCollectedBy", ...)
-
-  expectedReportAt  DateTime @db.Timestamptz(3)
-  expectedReportOverridden Boolean @default(false) // operator typed a custom ETA
-
-  @@index([sampleStatus, sampleDueAt])  // revisit worklist
-  @@index([expectedReportAt])           // reports-due list
-  @@map("bill_items")
+model SampleCollection {
+  billItemId, testId, sequence, label               // testId = the line's own test, or a component of its profile
+  status   pending | collected
+  dueAt?                                            // revisit: when the patient is expected back
+  collectedAt?, collectedById?
 }
 ```
 
-**Report-ETA rule** (computed server-side, never trusted from the browser):
+- `originalAmount = Σ price of active items`, computed by the server.
+- **Profiles are one billed line.** Their component tests matter for processing and reports
+  (later phases), and the bill's print lists them under the profile.
+- At billing, **each test's** draws are marked **collected now** or **due at**. For a profile,
+  every component test is listed separately, so part of a profile can be collected now and
+  the rest on a revisit. A revisit = pending `SampleCollection` rows with a `dueAt`. Recording
+  the revisit marks the chosen tests' draws collected (who, when).
+- **Report expected by**: one date-time per bill, entered manually (review R2 Q14).
+  The TAT engine (later phase) will compute it.
 
-```
-expectedReportAt = (sampleCollectedAt ?? sampleDueAt ?? requestedAt) + tatHours
-```
-
-- The ETA counts from when the **sample** arrives, not from billing. A patient
-  billed today who comes back tomorrow for the sample gets a later ETA.
-- When a pending sample is marked collected, every item whose ETA has **not** been
-  overridden gets its ETA recomputed. Items with a manual override keep it.
-- The operator can override the ETA per item (e.g. "Saturday, lab closed Sunday").
-  In v1 TAT is plain hours. Cut-off rules ("before 11 AM → same-day 6 PM") are an
-  open question (§11), and adding them later only changes this one function.
-- **Bill-level ETA** = `MAX(items.expectedReportAt)`. Derive it in the query
-  rather than storing a column that can drift.
-
-**Why sample fields sit on the item, not in a separate visit table:** one bill
-can have urine collected now and fasting blood tomorrow, so status really is per
-test. One revisit usually covers all of a bill's pending items, so the UI sets
-one revisit time and applies it to all pending items, and one "mark collected"
-action closes them together. A `SampleVisit` table (with a phlebotomist,
-home-collection address, etc.) only becomes worthwhile if home collection gets
-added. That's noted as a possible later step and not built now.
-
-### 3.3 `Bill` changes
-
-- `originalAmount` becomes **server-computed** from items. The column itself stays.
-- Add `quotationId String? @unique` → `Quotation` (one quote converts to at most one bill).
-- Optional, if §2.2 is accepted: `referringDoctor String?`.
-- Nothing else changes. Refund, reassignment, settlement and the bill-number scheme
-  stay as they are.
-
-Old bills with no items, like the "legacy" handling we already have for `locationId`/`categoryId`:
-any existing bills simply have zero items and show "—" for tests and ETA.
-After the go-live reset (`scripts/consolidate-migrations.ps1`) this won't matter.
-
-### 3.4 `Quotation` + `QuotationItem`
+### 4.9 Quotations
 
 ```prisma
-enum QuotationStatus { open  converted  cancelled }   // "expired" = open && validUntil < now, derived
-
 model Quotation {
-  id            String   @id @default(uuid())
-  quoteNumber   String   @unique             // see numbering below
-  patientId     String?                       // existing patient, if picked
-  patientName   String                        // always stored; patient row created only on conversion
-  locationId    String
-  categoryId    String
-  originalAmount Decimal @db.Decimal(12, 2)
-  discountAmount Decimal @default(0) @db.Decimal(12, 2)
-  netAmount     Decimal  @db.Decimal(12, 2)
-  validUntil    DateTime @db.Timestamptz(3)
-  status        QuotationStatus @default(open)
-  notes         String?
-  createdById   String
-  createdAt     DateTime @default(now()) @db.Timestamptz(3)
-  bill          Bill?                         // back-relation via Bill.quotationId
-  items         QuotationItem[]
-  @@map("quotations")
-}
-
-model QuotationItem {
-  id          String @id @default(uuid())
-  quotationId String
-  labTestId   String
-  testName    String           // snapshot
-  testCode    String
-  price       Decimal @db.Decimal(12, 2)
-  tatHours    Int
-  @@map("quotation_items")
+  quoteNumber       String @unique    // Q + locationCode + YY + MM + seq (existing counter, "Q" key)
+  verificationCode  String @unique    // random; printed as a barcode
+  patientId?, patientName, patientPhone?     // a patient row is created only on conversion
+  locationId                          // issuing branch/centre (its address is printed)
+  createdById                         // issuing technician/pathologist (printed)
+  referralType, referringDoctorId?, payerType, panelId?, campId?
+  originalAmount, discountAmount, netAmount
+  issuedAt, validUntil                // validUntil = issuedAt + 48 h
+  status  open | converted | cancelled          // "expired" = open && now > validUntil
+  items   QuotationItem[]             // catalogItemId + code/name/kind/price snapshots
 }
 ```
 
-- **The patient row is created only when the quote is converted to a bill.**
-  Quotes that never convert don't fill the patient list with junk.
-- **Numbering:** reuse `generateBillNumber()` and the `BillCounter` table with a
-  `Q` prefix on the key (`Q` + locCode + YY + MM → `Q0426100003`).
-  `counterKey` is already a free-form string PK, so **no schema change** is needed,
-  and quote sequences never collide with bill sequences.
-- **Price on conversion:** if the quote is still valid, the bill takes the **quoted**
-  prices (that's the point of a quote). Tests added at conversion time use the
-  current catalog price.
+- **Optional**: a bill doesn't need a quotation.
+- **Within 48 h**: converts at the **quoted prices**, even if the catalog changed since.
+- **After 48 h**: if every line's quoted price **still equals today's price** (§4.7, same
+  payer), the same quote can still be converted. If any price changed, it must be
+  **re-issued**: a new quote, new number, current prices, a fresh 48 h. The old one stays as history.
+- Converting locks the quote, checks it, creates the bill through the shared billing
+  service, and marks the quote converted. A second conversion fails cleanly (`@unique` on
+  `Bill.quotationId`).
+- A quote's discount is only a proposal. The approval is created on the **bill** when the
+  quote is converted.
+
+### 4.10 Money movements: payments, cancellations, refunds
+
+```prisma
+model Transaction  { … a payment, as today (amount, extra discount, mode, who) … }
+model Cancellation { billId, reason, createdById, createdAt, items BillItem[], refund Refund? }
+model Refund       { billId, cancellationId, amount, mode, createdById, createdAt }
+```
+
+Derived values (one service function, used everywhere):
+
+```
+originalAmount = Σ active item prices
+netAmount      = originalAmount − discountAmount
+collected      = Σ payments − Σ refunds
+balance        = netAmount − collected
+status         = cancelled if no active items; fully_paid if balance = 0; otherwise pending
+```
+
+**Cancelling tests**, in one DB transaction with the bill row locked:
+
+1. **Refuse** if any chosen item's `processingStatus` isn't `not_started`. A test that has
+   started, or has results in the system, can't be cancelled (review R2 Q8). Phase 1 has
+   no processing yet, so the rule is enforced from the first day and simply starts biting
+   once processing exists.
+2. Mark the items cancelled and recompute `originalAmount`. The discount is bill-level:
+   the dialog shows it, defaulting to `min(discount, new subtotal)`. The technician confirms
+   it, and a changed discount raises its own discount approval.
+3. If `collected > netAmount`, record a `Refund` for the difference (mode chosen in the
+   dialog). A panel bill with nothing collected just has its balance reduced.
+4. Create the **cancellation approval**. The bill's report is held until a pathologist or
+   the lead approves it. It's self-approved when a pathologist or the lead did the
+   cancelling (§4.2).
+5. **Whole-bill refund** = cancel all items, the same path. The old refund route and the
+   `refundedAmount/refundedAt/refundedById` columns go away.
+
+**Discounts**: any amount, up to 100%, at billing or later (payment-time extra discount or
+an edit). Each discount change creates a **discount approval** and holds the report until
+it's approved: self-approved when a pathologist or the lead enters it, reverted if rejected (§4.2).
+
+Analytics: daily "collected" = payments − refunds that day. **Refunds** get their own
+count/amount column. Billed totals exclude cancelled items. BUG-006 (editing or deleting a
+payment) stays parked.
 
 ---
 
-## 4. Backend changes (src/)
+## 5. Backend changes (src/)
 
-Small and mostly additive:
-
-| File | Change |
+| Area | Change |
 |---|---|
-| `src/services/billing.js` (new) | Move the body of `POST /api/bills` (patient find-or-create, location/category checks, numbering, bill + initial payment in one DB transaction) into `createBill(tx, input, userId)`. **Do this first, with no behavior change**, so `POST /bills` and quote conversion share one code path. |
-| `src/utils/reportEta.js` (new) | `computeExpectedReportAt(item)`: the one place the ETA rule lives (§3.2). Pure function, easy to unit test. |
-| `src/utils/istDate.js` | Add an "IST date + time string → `Date`" helper. `<input type="datetime-local">` gives a value with no timezone attached, and it must be read as **IST**, never as the browser's or server's local time (same rule as the existing date handling; see README timezone section). |
-| `src/routes/bills.js` | `POST /`: replace `originalAmount` with `items: [{ labTestId, sampleStatus, sampleDueAt?, expectedReportAt? }]`, plus optional `quotationId`. The server loads the active tests, snapshots price/TAT, computes `originalAmount = Σ price` in paise, and computes ETAs. Reject an empty items list, duplicate tests and inactive tests. `GET /` and `GET /:id` include `items`. **New** `PATCH /:id/samples` `{ itemIds, collectedAt? }`: marks samples collected, stamps who/when, recomputes ETAs. Lock the bill row first with `SELECT … FOR UPDATE`, like refund does. **New** `PATCH /:id/items/:itemId/eta` for manual override. Both refuse refunded bills. |
-| `src/routes/labTests.js` (new) | `GET /` (operator, admin), `POST /` and `PATCH /:id` (admin: price/TAT/name edits), `DELETE /:id` (admin, soft). Same shape as `locations.js` and `categories.js`. |
-| `src/routes/quotations.js` (new) | `GET /` (filter by status), `GET /:id`, `POST /`, `PATCH /:id/cancel`, `POST /:id/convert` (in one DB transaction: lock the quote, check it is `open` and not expired, call `createBill` with quoted prices, set `status=converted`). Converting twice must fail cleanly. The `@unique` on `Bill.quotationId` backs that up. |
-| `src/routes/worklist.js` (new; or fold into bills.js) | `GET /api/worklist/pending-samples?date=` (items `pending`, due on or before the date, grouped by bill/patient) and `GET /api/worklist/reports-due?date=`. Read-only. |
-| `src/routes/analytics.js` | **New** `GET /test-wise` (count and gross revenue per test in the date range). Existing queries unchanged apart from the client→patient rename in raw SQL (§2.1). |
-| `src/server.js` | Mount the new routers. Rename strings. |
-| `src/routes/transactions.js`, `companies.js`, `users.js`, `auth.js` | **No logic change.** Only `clientId → patientId` if the full rename (§2.1) is chosen. |
-
-**Note on test-wise revenue:** discounts are bill-level, so a test's *net*
-revenue isn't exactly defined. v1 reports gross (catalog-snapshot) revenue and
-counts. Spreading the discount pro-rata across items is possible later but
-should be a deliberate decision.
-
----
-
-## 5. Frontend: do the duplication cleanup before adding features
-
-Today the Billing UI exists **twice**: `public/js/operator.js` and `public/js/admin.js`
-(Billing tab) are near-identical, and so are the matching HTML blocks. Analytics
-likewise exists in both `admin.js` and `accountant.js`. Every component below
-would otherwise be built twice.
-
-**Step 0 (no behavior change):**
-
-- Extract `public/js/billing.js`: Create Bill, Record Payment, Settle, My Bills,
-  Refund modal. Both role pages load it and call `initBilling()`.
-- Extract `public/js/analytics.js` shared by admin and accountant.
-- The HTML stays duplicated (no build step, no templating), but the blocks are
-  identical, so later edits are copy-paste. The alternative is to have
-  `billing.js` render the markup itself. That's cleaner, but it's a bigger change
-  and makes the HTML harder to scan. Recommendation: **keep the static HTML**.
-- The whole e2e suite must stay green through this step without changes. That is the proof
-  nothing broke.
-
-`server.js` notes that pages must have no inline `<script>` (CSP
-`script-src 'self'`). The new modules are separate files, so that holds.
+| Schema | Fresh squashed `init` migration with §4; DB renamed `lab_management`. |
+| `middleware/auth.js`, all routes | New role names. Pathologists get every technician permission. |
+| `services/billing.js` (new) | Patient resolution, pricing (§4.7), bill creation (shared by `POST /bills` and quote conversion), derived totals, cancellation + refund, discount changes, report-hold computation. |
+| `services/approvals.js` (new) | Create (self-approving a pathologist's or the lead's own discount or cancellation), approve, reject with the round 4 outcomes (revert the discount, drop the doctor, cancellation stays held). Per-subject rules: who may approve, apply-on-approve vs hold-clearing. |
+| `routes/patients.js` | Search (`?q=` name / phone / number, incl. old numbers via aliases), create (derives the number; an exact match returns the existing patient; the unique `identityKey` blocks duplicates; look-alike warning), propose a correction (→ approval; applied on approval: re-derive, alias, audit, duplicate refused). |
+| `routes/bills.js` | Create with items, referral, payer, collection mode, draws. `GET /:id` (items, collections, payments, refunds, holds). `PATCH /:id/cancel-items`, `/discount`, `/samples`, `/expected-report`. Reassign (lead). |
+| `routes/transactions.js` | Payments as today. A payment-time discount raises an approval. |
+| `routes/panels.js`, `routes/camps.js` | Panels with their standing price lists, outstanding bills, settlement; camps with schedule and price list (lead). |
+| `routes/doctors.js` | List (approved + pending), propose. Approval goes through approvals. |
+| `routes/catalog.js` | Active catalog; propose (single or a grid batch); profiles with components; machine steps. |
+| `routes/machines.js`, `routes/locations.js` | Machine types, machines (lead). Locations with type, address, processing branch. |
+| `routes/approvals.js` | The queue (filtered by what the caller may approve), approve / reject with a note. |
+| `routes/quotations.js` | Create, list, get, cancel, convert (incl. the expired-but-unchanged rule), re-issue. |
+| `routes/verify.js` | `GET /api/verify/:code` → the quote or bill it belongs to. |
+| `routes/settings.js`, `routes/users.js` | Lab settings (lead); first-run setup (developer: lab settings + first lead, only while empty); user accounts: create, deactivate, reset password (**lead only**); lead hand-over; developer re-appointment of the lead after 7 days of lead inactivity (`lastLoginAt`). |
+| `routes/analytics.js` | Technician-wise, branch-wise, referral-wise (per doctor), payer-wise (per panel), test-wise, refunds, pending approvals. |
 
 ---
 
-## 6. New / changed UI components
+## 6. Screens (React + TypeScript + Ant Design, §12)
 
-### 6.1 Test picker + line-items editor (shared by Bill and Quotation)
+### 6.1 Catalog
 
-The core new component, `attachTestItemsEditor({ container, tests, mode: "bill" | "quote" })`
-in `common.js`:
+- **Catalog**: a searchable table of active items (everyone), with profiles showing their tests.
+- **Add / edit items (technician, pathologist)**: an **editable grid with the column headers
+  already in place** (§4.6). Rows can be filled a few at a time, so the catalog gets built in
+  instalments; pasting rows from Excel is supported. Profiles pick their component tests
+  from approved tests. Each row becomes a catalog approval.
+- **Machines (lead)**: machine types and units per branch.
 
-- A search input built on the existing `attachCombobox` (keyboard/ARIA work from
-  BUG-014/018 is reused). It matches on **code or name**. Selecting a test **appends a
-  row and clears the input**, ready for the next test (multi-add, unlike the
-  single-value comboboxes we have today). Already-added tests are hidden from results.
-- Item rows: Code · Test · Price · TAT · Sample (`Collected now` / `Revisit`) · Report ETA · ✕.
-  - "Sample" and "ETA" columns appear only in `bill` mode.
-  - Choosing "Revisit" reveals one **bill-level** "Revisit on" datetime input that
-    applies to all revisit rows.
-  - ETA is shown as computed. A small "edit" control turns it into a
-    datetime input (sets the override flag).
-- Live totals beneath: Subtotal (Σ price) → Discount → Net. "Amount collected now"
-  is checked against Net as it is today.
-- The browser computes the ETA **for display only**. The server recomputes and stores it.
-- Accessibility to keep at today's bar (axe spec runs on every page): a real `<table>`,
-  remove buttons labelled "Remove {test name}", totals in a live region.
+### 6.2 Approvals (pathologist, lead)
 
-Performance with "many tests": `GET /api/lab-tests` returns the whole active
-catalog once and the combobox filters in the browser. That's fine into the low
-thousands of tests. If the catalog grows past that, switch to `?q=` server search;
-the component's interface doesn't change.
+One queue, filtered to what the signed-in user may approve:
 
-### 6.2 Create Bill form (operator.html + admin Billing tab)
+- **Pathologist:** discounts, cancellations and patient corrections (old and new values side by side).
+- **Lead:** those, plus catalog changes and doctors.
 
-- Patient (renamed) · Category · Bill date · Location: unchanged.
-- **Remove** "Original amount (MRP)". **Add** the items editor (6.1).
-- Discount, Amount collected now, Mode: unchanged.
-- If opened from a quote: a banner "From quotation Q…" and the items prefilled at quoted prices.
-- After a successful create, offer **"Print bill"** (see 6.6).
+Each entry shows the bill or proposal, who asked and when, plus the values; edits show old
+and new values. Approve or reject with a note, one at a time or in bulk. Requesters see the
+status of what they submitted.
 
-### 6.3 Quotation screen (new card/tab for operator + admin)
+### 6.3 Doctors
 
-- Form: Patient name (combobox; picking an existing patient sets `patientId`,
-  typing a new name only stores the name) · Location · Category · items editor in
-  `quote` mode · Discount · Valid until (default: today + N days) · Notes.
-- Actions: **Save quotation**, **Download quotation PDF**.
-- "Open quotations" table: Quote # · Patient · Tests (count/short list) · Net · Valid until ·
-  Status · Actions [**Convert to bill**] [Cancel] [PDF].
-- **Convert to bill** prefills the Create Bill form (6.2) with the quote. The operator
-  then sets sample status, revisit time and payment, and submits `POST /bills` with
-  `quotationId`, rather than converting in one click. Reason: the conversion step is
-  where sample/payment details are captured anyway.
-  (`POST /quotations/:id/convert` still exists for API use and tests.)
-- Quotes stay **optional**. A walk-in can still be billed directly.
+A list of approved and pending doctors, with "Add doctor" (technician or pathologist,
+→ pending). The lead approves in the queue.
 
-### 6.4 Sample revisits & reports-due worklist (new card)
+### 6.4 Quotation
 
-- "Pending samples": patients due back today, plus overdue ones in red. Each row
-  shows: Bill # · Patient · Tests pending · Due at · [**Mark collected**].
-  Mark collected opens a confirm modal (reuse `setupModal`) listing the pending
-  tests as checkboxes (all ticked by default, like the Settle list) and a
-  "collected at" time defaulting to now.
-- "Reports due": Bill # · Patient · Tests · ETA (sorted). Read-only for now (see §8).
+Patient (search, or name + phone), branch/centre, referral, payer (+ camp), items
+(searchable `Select` + `Form.List`, priced via §4.7), discount, totals, validity shown.
+Actions: **Save & print** (Zebra GT820), cancel, **Convert to bill**, **Re-issue** (when expired
+and prices changed). Conversion opens Create Bill prefilled.
 
-### 6.5 My Bills table
+### 6.5 Create bill and bill detail
 
-- Add columns **Tests** (short list, with the full list in the row's `title`/expand) and
-  **Report ETA**. Add a "Sample pending" badge next to Status. The table is already
-  12 columns wide, so an expandable row is likely better than more columns.
-  To be decided during the UI step.
+- **Create:** patient (search or new-patient form), branch/centre + collection mode
+  (home visit → optional address; a home-visit line at the location's charge, which the
+  technician may raise), referral (+ optional doctor), payer (+ camp), items (with the
+  overlap warning), **sample status per test and draw** (profiles expanded into their tests), discount, report expected by,
+  payment now. Then **Print bill (A4)**.
+- **Detail:** items with sample status, payments, refunds, **report holds** (with reasons and
+  approval status), reassignment history. Actions: payment, **cancel tests** (blocked for
+  started tests), change discount, record revisit collection, change expected report time, reprint.
 
-### 6.6 Bill receipt / print (new)
+### 6.6 Pending revisits
 
-There's currently **no printable bill**; only the My Bills list exports to PDF. A
-lab bill handed to the patient must show: lab name/location, bill #, patient,
-date-time, **each test with price**, discount, net, paid, balance, **report ETA**,
-and **"Please come back on … for sample"** if anything is pending. Build it with
-the jsPDF we already vendor (`downloadPdfReport` in `common.js` is a starting point,
-though a receipt layout differs from a report table). The same renderer, with a
-different title, gives the **Quotation PDF**.
+Patients due back (today first, overdue highlighted). One click records the collection.
 
-### 6.7 Admin: Tests tab (catalog management)
+### 6.7 Day Sheet (replaces My Bills)
 
-- Add form: Code · Name · Price · TAT (hours) · Sample type. Table with inline
-  **Edit** (price/TAT/name change constantly in a lab, unlike Locations/Categories)
-  and Deactivate. A search box over the table, since it will be long.
-- **Bulk import:** with "many tests getting added", typing them one by one is a
-  real cost. Option A: a CSV upload on this tab (`POST /api/lab-tests/import`,
-  inserted all-or-nothing, with a per-row error report). Option B: a one-off
-  `scripts/import-tests.js` for the initial load, plus the form for later additions.
-  Recommendation: **B first**, A if admins keep needing it.
+A spreadsheet-style grid of the **signed-in user's entries for a chosen date** (default
+today): time, bill #, patient, age/sex, items, referral, payer, net, paid, mode, balance,
+status, holds. **Totals by payment mode** at the bottom, for the cash hand-over.
+**Print (A4).** The lead and accountant can open anyone's Day Sheet.
 
-### 6.8 Analytics
+### 6.8 Panel settlement, masters, settings, users
 
-- New "Test-wise Summary" card (Test · Count · Gross revenue) with PDF download,
-  in the shared analytics module so admin and accountant both get it.
-- Rename labels: "Client Outstanding Balances" → "Patient Outstanding Balances",
-  "Per-Client Detail" → "Per-Patient Detail". The bill ledger there gains a Tests column.
+- **Panel settlement:** as today's company settlement.
+- **Lead only:**
+  - **Panels** with standing price lists, and **camps** (schedule + price list: custom prices, % discount)
+  - **Branches & centres**
+  - **Lab settings** (name, contact)
+  - **Reassign technician**
+  - **Hand over lead**
+  - **User accounts** (create, deactivate, reset password)
+- **Developer:** first-run setup; re-appointing the lead after 7 days of lead inactivity.
+
+### 6.9 Verify document
+
+A search box that takes a scanned barcode (reception has scanners). It shows the quote or
+bill the code belongs to: number, date, patient, amount, validity or status. If the patient's
+details were corrected after the document was printed, it says so (§4.4).
+
+### 6.10 Analytics (lead, accountant)
+
+Adapted summaries (§5), test-wise and refunds. PDF downloads on A4.
+
+The accountant tallies all money **daily, weekly and monthly** for audit, so the date range
+gets presets (**today, this week, this month, last month, custom**). A **tally summary**
+covers the chosen period:
+- payments by mode
+- refunds by mode
+- net collected by mode
+- outstanding panel balances
+- discounts given (approved / pending)
+
+Each period's totals must equal the sum of its Day Sheets.
 
 ---
 
-## 7. Roles and permissions
+## 7. Printing
 
-| Capability | operator | admin | accountant | developer |
-|---|---|---|---|---|
-| View test catalog | ✓ | ✓ | — | — |
-| Manage test catalog | — | ✓ | — | — |
-| Create / cancel quotation, convert to bill | ✓ | ✓ | — | — |
-| Create bill with items | ✓ | ✓ | — | — |
-| Mark sample collected, override ETA | ✓ | ✓ | — | — |
-| Worklist | ✓ | ✓ | — | — |
-| Test-wise analytics | — | ✓ | ✓ | — |
+| Document | Printer | Layout |
+|---|---|---|
+| Quotation | **Zebra GT820** thermal barcode printer, continuous media with ribbon (thermal transfer), shared on the LAN | 104 mm wide, as long as the content, receipt-style, single column, black only, Code 128 barcode |
+| Bill, Day Sheet, revisit list, analytics PDFs | **HP, A4** | Normal A4 layout with tables |
 
-Every new route gets a case in `e2e/specs/auth/api-permissions.spec.js`.
+### 7.1 How: browser printing for everything
 
----
+Round 4 corrected the quotation printer: it's a **Zebra GT820 thermal barcode printer**, not
+a dot-matrix, on fanfold media and shared on the LAN. Printing stays **in the browser**
+(round 3), through Zebra's Windows driver (ZDesigner).
 
-## 8. Explicitly out of scope for this pivot (POS module only)
+- Each printable document has a **print route** rendering a print-only layout with its own CSS:
+  - **Quotation** (`/print/quotation/:id`): the GT820 prints at **203 dpi** with a maximum
+    print width of **104 mm** (confirmed in round 5), on **continuous** media with a ribbon
+    (thermal transfer). The quotation is a **narrow, receipt-style** document: one column,
+    one item per line, then totals, and a footer with validity terms and barcode.
+    **The page is as long as the quotation** (round 6: the 300 is the ribbon's maximum size,
+    not a page limit). CSS can't size a page to its content on its own, so the print view
+    **measures the rendered quotation and sets `@page { size: 104mm <measured height> }`**
+    just before calling `window.print()`. The ZDesigner driver must be set to continuous
+    media so it accepts that length. This gets **verified on the real GT820 in Step 5**.
+    Fallback if the driver won't take a custom length: a fixed page length, with totals,
+    validity terms and barcode kept together on the last page.
+  - **A4 documents** (`/print/bill/:id`, `/print/day-sheet?date=`, …): `@page { size: A4 }`.
 
-- Entering results, report generation/printing, reference ranges, report approval.
-  The "Reports due" list only shows the ETA; nobody marks a report as done yet.
-  When the reporting module arrives, `BillItem` gets a `reportStatus`. This design
-  leaves room for that.
-- Home collection / phlebotomist routing (would introduce `SampleVisit`, §3.2).
-- Partial refunds / cancelling one test on a bill. Refund stays whole-bill. Labs do
-  cancel single tests, so this is a likely future request; see §11.
-- Editing a bill's tests after creation (changes money). v1: refund and re-bill.
-- BUG-006 (no UI to edit/delete payments) is still parked and unaffected.
+  The print button opens the route and calls `window.print()`.
+- **The driver's paper size must match the media.** Set it once per PC in the ZDesigner
+  settings, otherwise Chrome scales the page.
+- **Choosing the printer:** the browser can't pick a printer itself. Staff choose the GT820
+  for quotations and an HP for everything else in the print dialog, and Chrome remembers
+  the last printer used. The two layouts look nothing alike, so a quotation sent to the HP
+  (or a bill to the GT820) shows up straight away.
+- Thermal output is black-only and sharp. The layout avoids greys and fills, which thermal
+  printers render as dithering.
+- The analytics "Download PDF" buttons (jsPDF, A4) stay as they are.
 
----
+### 7.2 What's printed
 
-## 9. Impact on the e2e suite
+- **Header (all documents):** lab name and lab contact (from `LabSettings`); **address and
+  phone of the branch/centre** that issued the document.
+- **Quotation:** quote #, issued date-time, **name of the technician who issued it**,
+  patient, referral, payer, items (profiles with their tests, patient instructions),
+  subtotal, discount, net. **Footer:** validity terms ("Valid for 48 hours, until
+  <date time>") and the **verification barcode**.
+- **Bill (A4):** the same header, plus bill #, date-time, technician, patient (name,
+  age/sex, phone, **patient number**: all current, §4.4), referral, payer, items (cancelled ones shown
+  as cancelled), subtotal, discount, net, paid by mode, refunds, balance, **report expected
+  by**, **pending sample visits**, patient instructions, **verification barcode**.
+- **No tax information anywhere** (review R2 Q16).
+- Report holds are internal. They never appear on patient-facing prints.
 
-- **Page objects** (`e2e/pages/billing.js`, `analytics.js`, `admin.js`) find elements by
-  element id. If ids are renamed in the Client→Patient change, update the page
-  objects in the same commit. Specs mostly talk to the page objects, so damage stays
-  contained. About 100 text assertions across 14 spec files contain "Client",
-  "Bill", etc., and need a pass.
-- **API helper**: `e2e/helpers/api.js#createBill` currently sends `originalAmount`,
-  and specs pass `originalAmount` about 147 times. Keep that option on the
-  *helper*: when given `originalAmount`, it uses (or creates via adminApi, cached
-  by price) a catalog test priced at that amount and sends it as a single item.
-  Existing money specs stay as they are.
-- **Seed** (`e2e/helpers/seed.js`): add a few baseline lab tests (different TATs,
-  one with a pending-sample scenario).
-- **New specs**: `catalog/lab-tests.spec.js`, `billing/bill-items.spec.js` (totals,
-  ETA, backdated ETA, revisit), `billing/samples.spec.js` (mark collected → ETA
-  recompute, override preserved, refunded bill refuses), `quotations/*.spec.js`
-  (create, PDF, convert, double-convert refused, expired refused, quoted price
-  honoured after a catalog price change), concurrency (two operators mark the same
-  sample collected; two converting the same quote).
-- **Visual snapshots**: all 15 baselines change because of the name change. Re-baseline
-  with `npm run test:e2e:update-snapshots` after each UI step, and add new states:
-  items editor, quotation screen, worklist, Tests tab. `helpers/mock-api.js` needs
-  fixtures for the new endpoints.
-- `bugs/`: no changes.
+### 7.3 Verification barcode
 
----
-
-## 10. Suggested order of work
-
-Each step is shippable on its own and ends with a green suite.
-
-| # | Step | Backend | Frontend | Risk |
-|---|---|---|---|---|
-| 0 | **Refactor, no behavior change**: `services/billing.js`, `public/js/billing.js`, `public/js/analytics.js`. **Frontend half done 2026-10-25** (all 326 e2e pass, visual baselines unchanged). The backend `services/billing.js` extraction is still pending; it can wait until Step 5 (quotations), its first second caller. | small | medium | low (suite proves it) |
-| 1 | **Rename**: app name, Client→Patient (§2.1), labels (§2) | migration (hand-edited) + raw SQL | labels/ids | medium (the migration) |
-| 2 | **Test catalog**: `LabTest`, `/api/lab-tests`, admin Tests tab, import script | small | small | low |
-| 3 | **Bill items**: `BillItem`, `POST /bills` with items, ETA rule, items editor, Create Bill form, My Bills columns, **bill print** | medium | **large** | medium |
-| 4 | **Sample revisits**: `PATCH /bills/:id/samples`, ETA override, worklist card | small | medium | low |
-| 5 | **Quotations**: models, routes, Quotation screen, convert flow, quote PDF | medium | medium | medium |
-| 6 | **Analytics**: test-wise summary, ledger tests column | small | small | low |
-| 7 | Docs: README/REFERENCE/SETUP_GUIDE rewrite for the new domain, schema comments | — | — | — |
-
-Steps 2 and 3 can merge if you'd rather not ship a catalog nobody can use yet.
+- Each quote and bill gets a random, unguessable `verificationCode` (e.g. 12 characters).
+  It's never the sequential number.
+- Printed as **Code 128** (JsBarcode) with the code in readable text underneath, on both
+  printers. Thermal bars print crisply. Render the barcode at the GT820's native 203 dpi so
+  bars aren't resampled, and still **test print and scan early on the real GT820**. The
+  readable text lets staff type the code in if a scan fails.
+- Scanning it in Verify Document shows the record from the database. A forged or altered
+  printout won't match.
 
 ---
 
-## 11. Open questions (need your call before the relevant step)
+## 8. Roles and permissions (Phase 1)
 
-1. **Production data?** Is there a live install with real bills? This decides between the
-   full DB rename and the `@@map` fallback (§2.1), and whether the DB name changes.
-2. **Patient fields:** add age, sex, phone, referring doctor (§2.2)? Required or optional?
-3. **UI words for:** Operator role ("Front Desk"?), Category ("Billing Type"?), Company
-   ("Panel / Corporate"? "TPA"?), Location ("Branch" / "Collection Centre"?).
-4. **TAT model:** plain hours is fine for v1? Or do tests have cut-offs/fixed report
-   times ("sample by 11 AM → report 6 PM same day"), or does the lab close on
-   Sundays/holidays?
-5. **Where does TAT count from:** the sample collection time (as proposed) or always the bill time?
-6. **Quotation:** optional (proposed) or mandatory before every bill? Default validity period?
-   Should a quote reserve its price even after the catalog price rises (proposed: yes, while valid)?
-7. **Panels/profiles:** does POS need to know which tests make up a panel, or is a
-   panel just a priced catalog entry for now (proposed)?
-8. **Single-test cancellation / partial refund:** needed soon? This is the one item
-   that would touch the money layer, so better to know early.
-9. **Test catalog size and source:** roughly how many tests, and is there an existing
-   list (Excel/CSV) to import?
-10. **Per-test discount** or bill-level only (proposed: bill-level only, as today)?
-11. **Bulk test import (§6.7):** start with a one-off import script (proposed), or build a
-    CSV upload screen on the Tests tab from day one?
-12. **My Bills with tests (§6.5):** an expandable row per bill (proposed) or extra columns
-    on an already 12-column table?
-13. **Printed bill / quotation header (§6.6):** what has to be on it: lab name, address,
-    phone, GSTIN, logo, per-branch details, footer text (e.g. "reports collectable after…")?
+| Capability | technician | pathologist | lead | accountant | developer |
+|---|---|---|---|---|---|
+| Patients, quotations, bills, payments, revisits, cancellations, discounts | ✓ | ✓ | ✓ | — | — |
+| Panel settlement | ✓ | ✓ | ✓ | — | — |
+| Own Day Sheet | ✓ | ✓ | ✓ | — | — |
+| Any Day Sheet | — | — | ✓ | ✓ | — |
+| Propose catalog changes, add doctors | ✓ | ✓ | applies directly | — | — |
+| Approve discounts and cancellations (own included) | — | ✓ | ✓ | — | — |
+| Propose a patient correction | ✓ | applies directly | applies directly | — | — |
+| Approve patient corrections | — | ✓ | ✓ | — | — |
+| Approve catalog changes and doctors | — | — | ✓ | — | — |
+| Panels, price lists and camps, branches (incl. home-visit charge), machines, lab name/contact | — | — | ✓ | — | — |
+| Reassign technician, hand over lead | — | — | ✓ | — | — |
+| Analytics + PDF, period tally (daily / weekly / monthly) | — | — | ✓ | ✓ | — |
+| User accounts: create, deactivate, reset password | — | — | ✓ (only) | — | — |
+| First-run setup (lab settings + first lead) | — | — | — | — | ✓ (only while empty) |
+| Re-appoint the lead from the pathologists | — | — | (hand-over) | — | ✓ (only after 7 days of lead inactivity) |
+
+Every route's permissions get cases in `e2e/specs/auth/api-permissions.spec.js`.
+
+---
+
+## 9. Out of scope for Phase 1
+
+Everything in §10, plus: result entry, report generation (and so the *enforcement* of
+report holds), report approval by pathologists, editing or deleting a recorded payment
+(BUG-006), visit address management beyond the optional field.
+
+---
+
+## 10. Later phases: calendar, machines, TAT
+
+Captured now so Phase 1's data model doesn't block it.
+
+### 10.1 Lab calendar
+
+- Per date: **open / closed / half day** (hours), plus **which machines are available and
+  when** (calibration, half days, maintenance).
+- Edited **only by pathologists**. A pathologist's change needs approval from **another**
+  pathologist; the lead's apply directly. This uses the Phase 1 `Approval` table.
+- Once it exists: revisit dates and quote validity can respect closed days, and TAT reads it.
+
+### 10.2 Pathologist availability
+
+Visiting, part-time, specific days/weeks/months or custom periods. Not needed for TAT
+(T17 is invalid: a pathologist is always present while the lab is open). It still
+matters for scheduling and report approval later.
+
+### 10.3 TAT scenarios (validated in round 2)
+
+| # | Scenario | Decision |
+|---|---|---|
+| T1 | **Run cut-off times**: samples received after a cut-off wait for the next run (e.g. "by 11 AM → same-day report"). | valid |
+| T2 | **Batch-only tests**: some tests run only at fixed times or on certain weekdays (e.g. twice a week), regardless of when the sample arrives. | valid |
+| T3 | **Closed days and half days**: TAT pauses on closed days; on half days some tests can't run at all because their machines are down. | valid |
+| T4 | **Machine downtime**: calibration, maintenance or breakdown moves the test to a backup machine or delays it. | valid |
+| T5 | **Machine time windows**: a machine available only during certain hours of the day. | valid |
+| T6 | **Parallel vs sequential**: tests on different machines run in parallel; tests on the same machine queue one after another. | valid |
+| T7 | **Multi-machine tests**: a sample passes through several machines in sequence (e.g. pre-treatment, then analysis). | valid |
+| T8 | **Machine capacity / queue length**: a full queue on a busy day pushes later samples back. | **invalid**: the machine stays on until all collected samples are processed |
+| T9 | **Multiple draws**: the TAT starts from the *last* required sample (e.g. glucose tolerance at 0, 1 and 2 h). | **valid with a nuance**: TAT is from the last collected sample, but each sample is processed as soon as it's collected, never kept waiting |
+| T10 | **Fasting and timed samples**: a fasting sample can only be taken the next morning, so collection, and therefore TAT, starts later. | valid |
+| T11 | **Collection centre transport**: samples from a centre reach the processing branch only at scheduled pickup times. | valid |
+| T12 | **Home visits**: collection time is the visit slot, and transport follows as in T11. | valid |
+| T13 | **Outsourced tests**: sent to an external lab with that lab's own TAT plus courier time. | valid |
+| T14 | **Culture / incubation tests**: 24–72 h incubation, possibly a preliminary and a final report. | valid |
+| T15 | **Reruns**: QC failure, an abnormal result needing confirmation, or a rejected sample (haemolysed, insufficient) needing recollection. | valid |
+| T16 | **Reflex tests**: one result triggers another test (e.g. abnormal TSH → FT3/FT4), extending the bill's TAT. | valid |
+| T17 | **Pathologist sign-off**: the report waits for an available pathologist (visiting schedules). | **invalid**: while the lab is open a pathologist is always present; lunch breaks are not worth modelling |
+| T18 | **Report collection hours**: a report ready after the branch closes is only available the next opening time. | valid |
+| T19 | **Urgent / STAT priority**: jumps the queue, with a shorter TAT. | valid |
+| T20 | **Sample stability**: if a sample isn't processed within its stability window, it must be recollected. | valid |
+| T21 | **Reagent stock-out**: a test can't run until stock arrives. | valid, but never occurs: **not modelled** |
+| T22 | **Bill-level ETA**: a bill's report time is the latest of its tests, unless partial reports are released per test. | valid |
+
+**What this means for the TAT design** (the inputs the TAT phase will add):
+
+| Where | New inputs | Scenarios |
+|---|---|---|
+| Catalog item | machine-type steps (**Phase 1 already**), run schedule (cut-offs, batch days), incubation and preliminary/final stages, outsourced partner + external TAT, stability window, STAT option + STAT TAT | T1, T2, T6, T7, T13, T14, T19, T20 |
+| Calendar | open/closed/half days with hours; machine availability windows and downtime | T3, T4, T5, T18 |
+| Location | centre pickup schedule; branch report-collection hours | T11, T12, T18 |
+| Processing events | each draw processed when collected, test TAT from the last draw; reruns, recollections and reflex tests recompute the ETA; bill ETA = latest test, with per-test release | T9, T10, T15, T16, T22 |
+| Not modelled | queue capacity, pathologist availability, reagent stock | T8, T17, T21 |
+
+### 10.4 Sample tube labels
+
+The GT820 is a label printer, the usual choice for **barcoded sample-tube labels**. Once the
+processing phase arrives, each `SampleCollection` (§4.8) can print a tube label (patient,
+bill, test codes, barcode) on the same printer, and scanning that label can drive processing.
+Nothing is built in Phase 1. This is noted so the printer and the per-draw model line up.
+
+---
+
+## 11. Impact on the e2e test pack
+
+- **The old UI specs retire** with the old frontend (§13 Step 1). Their scenarios (double
+  submit, settle ticks, stale loads, modal keyboard handling, XSS) are re-created on the new screens.
+- **API-level specs carry over**, updated for the new model: permissions, concurrency, bill
+  numbers, money rules, the API half of security-inputs.
+- **New specs:**
+  - roles and lead hand-over: the outgoing lead becomes pathologist, only one lead
+  - pathologist doing reception work
+  - catalog grid → approval → active, including profiles and components, rejection, and non-lead attempts
+  - doctor pending → bill allowed → hold → approval clears the hold
+  - pricing: catalog vs camp (custom price, %, only inside the camp's scheduled period);
+    the home-visit minimum per location (raise allowed, lower refused)
+  - lead re-appointment by the developer: refused before 7 days of lead inactivity, allowed after
+  - self-approval by a pathologist or the lead
+  - rejections:
+    - a rejected discount reverts, and the hold lifts only once the bill is paid in full
+    - a rejected doctor is dropped from their bills
+  - profiles: overlap warning (a profile + its own test; two profiles sharing a test);
+    profiles cancel whole; a profile collected partly now and partly on a revisit (per-test draws)
+  - pricing precedence: running camp > panel's standing price list > catalog
+  - patient number:
+    - same details give the same number, and registering them again returns the existing patient
+    - a hash collision gets the next free number
+    - a correction re-derives the number, and the old number still finds the patient
+    - an old bill shows the corrected details
+    - a correction that clashes with another patient is refused, at proposal and at approval
+    - a technician's correction changes nothing until approved; a rejection leaves the patient untouched
+    - registering a duplicate is impossible, even with two simultaneous registrations (unique `identityKey`)
+    - the look-alike warning appears for a known phone with a similar name
+  - discount → hold → approval
+  - cancellation: refund, hold, refused for started tests (set `processingStatus` directly in the test DB)
+  - cancel all
+  - panel settlement after a cancellation
+  - quotation: 48 h validity, quoted price honoured, expired-but-unchanged converts, expired-and-changed must re-issue, double conversion refused
+  - verification codes
+  - home-visit charge
+  - Day Sheet totals by mode
+  - print views contain the required fields
+  - only the lead can create or manage accounts; the developer only before first-run setup completes
+  - accountant period tally equals the sum of that period's Day Sheets
+  - concurrency: two cancellations on one bill; two conversions of one quote; two approvers on one approval
+- **Page objects** use role and label locators. Visual baselines are created per screen
+  with motion off. `helpers/mock-api.js` is rebuilt.
+
+---
+
+## 12. Frontend framework: React + TypeScript + Vite + Ant Design
+
+### 12.1 Why Ant Design
+
+| Need | antd |
+|---|---|
+| Item picker, patient / doctor / panel search | `Select` with `showSearch` |
+| Items on a quote or bill, live totals | `Form.List` + `Form` validation |
+| Catalog entry grid, Day Sheet, approval queue | Editable `Table` (rows via `Form.List`); `Table` with `summary` and row selection |
+| Revisit / report-expected date-time | `DatePicker showTime` (dayjs, IST via `lib/ist.ts`) |
+| Cancel tests, record collection, approve/reject | `Modal`, `Popconfirm`, `Drawer` |
+| Statuses, holds, bill detail, quote → bill | `Tag`, `Descriptions`, `Steps`, `Tabs` |
+
+Mantine was the runner-up (its table is basic). The no-build options were ruled out: Bootstrap
+is styling only, Alpine's normal build needs `unsafe-eval`, and htmx needs server-rendered HTML.
+
+### 12.2 Stack
+
+- **React + TypeScript** + **Vite** + **antd** (current major; exact versions pinned at setup).
+- **react-router** (single-page app), **dayjs** with `utc` + `timezone` behind `lib/ist.ts`.
+- **JsBarcode**, **jsPDF + jspdf-autotable** from npm, bundled. No CDN.
+- **antd's default look**, no custom theme. Its default font is the operating system's
+  own font stack, so there are no font files to host and Google Fonts goes away.
+- **No state library**: React state plus small hooks (`useLookup`, `useSession`).
+- **API types** in `types/api.ts`, hand-written for Phase 1.
+
+### 12.3 Layout
+
+```
+client/
+  index.html
+  vite.config.ts          build → client/dist; dev proxy /api → http://localhost:8080
+  src/
+    main.tsx              ConfigProvider (default theme, en-IN formatting), router
+    api.ts  types/api.ts
+    lib/ist.ts  lib/money.ts
+    auth/                 LoginPage, useSession, RoleRoute
+    layout/AppShell.tsx   header (user, role, Change Password, Logout), role-based navigation
+    print/                A4 layouts, quotation print view (fallback), Barcode
+    features/
+      catalog/  approvals/  doctors/  quotations/  billing/  revisits/  daysheet/
+      panels/  masters/  settings/  users/  verify/  analytics/
+```
+
+### 12.4 Conventions
+
+- **IST only.** No direct dayjs calls in components; everything goes through `lib/ist.ts`.
+- **No raw HTML.** React escapes output (BUG-004), and `dangerouslySetInnerHTML` is banned
+  via the ESLint `react/no-danger` rule.
+- **No double submits** (BUG-010): antd `loading` plus re-entry guards.
+- **Money is display-only on the client.** Prices come from the server's pricing function.
+- **Accessibility:** labelled `Form.Item`s. The axe specs stay the gate.
+- **Motion off** when `prefers-reduced-motion: reduce`.
+- **Small components:** one per form or panel; shared bits in `src/components/`.
+
+### 12.5 Server, build and deploy
+
+- `server.js` serves `client/dist`, falls back to `index.html` for non-`/api` GETs, and
+  redirects the old `*.html` URLs.
+- **CSP:** `script-src 'self'` stays (check the built `index.html` once).
+  `style-src 'unsafe-inline'` stays (antd's runtime styles). Font and Google entries are dropped.
+- **Built on the server PC at every deploy**, so the build reads that install's environment.
+  `scripts/deploy.ps1` runs:
+  1. `git pull`
+  2. `npm ci`
+  3. `npx prisma migrate deploy`
+  4. `npm run build`
+  5. restart the NSSM service
+- Vite bakes **only `VITE_`-prefixed** variables into the frontend, and anyone using the app
+  can read them. **Never put secrets there.** Secrets stay server-side in `.env`.
+- E2E: the Playwright web server command builds first.
+
+---
+
+## 13. Order of work (Phase 1)
+
+| # | Step | Contents | Done when |
+|---|---|---|---|
+| 0 | ~~Frontend refactor~~ | **Done 2026-10-25** (shared `billing.js` / `analytics.js`, 326/326 e2e). | ✓ |
+| 1 | **Foundation (backend)** | Squashed schema (§4), DB rename, roles + lead hand-over, lab settings, locations, patients, doctors, panels + camps, catalog + machines, `Approval`, pricing, billing service. API specs updated. **The old plain-JS frontend is retired here.** | API specs green |
+| 2 | **Frontend scaffold** | Vite + React + TS + antd, login, AppShell, RoleRoute, first-run setup, user accounts (lead), lead hand-over, settings, branches, `server.js`, CSP, `deploy.ps1`. | Scaffold specs + axe green |
+| 3 | **Catalog + approvals** | Catalog table, entry grid, profiles, machines, approvals queue, doctors screen. | Catalog / approval specs green |
+| 4 | **Billing** | Create bill, bill detail, payments, discounts, cancellations + refunds, holds, revisits, panels / camps / settlement, Day Sheet, A4 prints, verification. | Billing + money specs green |
+| 5 | **Quotations** | Quote form, validity rules, conversion, re-issue, GT820 print view, barcode. | Quote specs green; **test print and scan on the real GT820** |
+| 6 | **Analytics** | Adapted and new summaries, period presets and accountant tally, PDFs. | Analytics + PDF specs green |
+| 7 | **Clean-up and docs** | Remove `public/` pages; README / REFERENCE / SETUP_GUIDE for the LMS; `bugs/` update. | — |
+
+Revision 1's one-for-one port of the old pages is dropped. The role, category and patient
+changes would throw most of it away, and with no live users there's nothing to keep
+running in between.
+
+---
+
+## 14. Decision log
+
+### Round 1 (on revision 1)
+
+| Q | Answer | Applied in |
+|---|---|---|
+| 1 Production data | Not live, demo only; full rename OK | §3.1 |
+| 2 Patient fields | Age, sex, phone required; more later | §4.4 (doctor made optional in round 2) |
+| 3 UI words | Operator → technician; category redone; branch / collection centre / visits | §3.1, §4.3, §4.5 |
+| 4–5 TAT | Calendar with machine availability, pathologist-only edits with approval; TAT can wait | §10 |
+| 6 Quotation | 48 h; optional; prices reserved while valid | §4.9 |
+| 7 Panels / profiles | Cut off in round 1; answered in round 2 (Q6) | §4.6 |
+| 8 Single-test cancellation | Needed from day 1 | §4.10 |
+| 9 Catalog | No list; ~150 tests | §4.6 |
+| 10 Discount | Bill-level only | §4.10 |
+| 11 Catalog entry | Technician grid, lead approves, in instalments | §4.2, §6.1 |
+| 12 My Bills | Grid of the day's entries, printable | §6.7 |
+| 13 Print header | No tax id; lab name, issuing branch address, issuing technician, lab contact; validity terms + barcode | §7.2, §7.3 |
+| 14–16 | TypeScript; antd default look; built on the server PC per deploy | §12 |
+| Extras 1–5 | Install-time lab settings and lead; one lead; hierarchy; TAT complexity; Zebra/HP printing | §3, §7, §10 |
+| Note | Phase 1 = catalog, quotation, billing | §1 |
+
+### Round 2 (on revision 2)
+
+| Q | Answer | Applied in |
+|---|---|---|
+| 1 Admin role | Remapped to lead pathologist. Pathologists approve reports and propose catalog entries, needing lead approval | §3.1, §3.2, §8 (user accounts: round 3) |
+| 2 Lead hand-over | The lead appoints a current pathologist and is warned their account becomes pathologist; a retired lead = pathologist rights | §3.3 |
+| 3 Referring doctor | Optional. Added on a separate screen, approved by the lead; bill allowed, report held until approved | §4.5, §4.2, §6.3 |
+| 4 Panels | Company camps can get different prices or discounts | §4.5, §4.7 |
+| 5 Centres / visits | Centre → processing branch; own location code each; home visit charged per catalog; address optional | §4.3 |
+| 6 Profiles | Must know which tests a profile covers | §4.6 |
+| 7 Quote validity | 48 h from issue. Re-issue uses new prices; an expired quote with unchanged prices stays usable | §4.9 |
+| 8 Cancellation | Discussed offline; report held until approved by a pathologist or the lead; refused once the test has started or has results | §4.10, §4.2 |
+| 9 Discounts | Any discount allowed (even 100%); every discount approved by a pathologist or the lead, else report held | §4.10, §4.2 |
+| 10 Catalog columns | Add the machines each test requires (for TAT) | §4.6 |
+| 11 Day Sheet | Cash total by mode needed; lead and accountant can open any | §6.7 |
+| 12 Printer | Zebra, continuous fanfold, on the LAN for all PCs | §7.1 (round 4: a GT820 thermal barcode printer) |
+| 13 Barcode on bills | Yes; scanners at reception | §7.2, §6.9 |
+| 14 Report expected time | Per bill | §4.8 |
+| 15 TAT scenarios | Marked in the table | §10.3 |
+| 16 Tax | No tax info anywhere | §7.2 |
+| 17 Patient number | Only on a few documents | §4.4 (bills and reports: round 6) |
+| 18 Pathologists | Full reception access (they cover for technicians on leave) | §3.2, §8 |
+
+### Round 3 (on revision 3, in chat)
+
+| Q | Answer | Applied in |
+|---|---|---|
+| 9 Printer | A Zebra **dot-matrix** printer (will say if that changes); print **through the browser**, no server-side printing | §7.1, §7.3 (printer type superseded in round 4; browser printing stands) |
+| Lead's own catalog changes | Apply directly, without approval | §4.6, §8 |
+| 1 User accounts | **Only the lead pathologist** creates accounts (technician, pathologist, accountant). The **accountant role stays**: someone tallies all money daily, weekly and monthly for audit | §3.2, §5, §6.8, §6.10, §8 |
+
+
+### Round 4 (on revision 3.1, in chat)
+
+| Q | Answer | Applied in |
+|---|---|---|
+| 2 Lead unreachable | The developer may appoint another pathologist as lead once the lead hasn't signed in for 7 days | §3.3, §4.1, §8 |
+| 3 Self-approval | Yes. A pathologist's own approval is enough; the lead isn't needed | §4.2 |
+| 4 Rejections | Rare (discussed offline). **Discount:** no report until the full amount is cleared. **Cancellation:** as proposed (held until the lead resolves it). **Doctor:** drop them from the bill | §4.2 |
+| 5 Camps | Own record. Custom per-test prices and a % on all tests, both needed, set by the lead for a scheduled period | §4.5, §4.7 |
+| 6 Profiles | A test lives standalone and inside profiles; profiles cancel whole; warn on overlap. Sample draws: "does it matter?" (explained; superseded in round 5) | §4.6 |
+| 7 Machines | Per branch; by machine type; same sequence = parallel. All confirmed | §4.6 |
+| 8 Home visit | Charge depends on the branch/centre: a fixed amount, which the technician can raise | §4.3, §4.7 |
+| 9 Printer | **Zebra GT820 thermal barcode printer**, not a dot-matrix | §7.1, §7.3, §10.4 |
+| 10 Patient number | Use the existing numbering logic, all-numeric, no letter prefix | §4.4 (superseded in round 5) |
+
+
+### Round 5 (on revision 3.2, in chat)
+
+| Q | Answer | Applied in |
+|---|---|---|
+| 1 Standing panel rates | Yes: a TPA or insurer may have its own price catalog | §4.5 (`PriceList` on a panel), §4.7 (camp > panel list > catalog) |
+| 2 Profile draws | Don't derive anything for profiles. Draws are test-level: one sample can cover one test, several, or all but one | §4.6, §4.8 (supersedes the round 4 proposal) |
+| 3 GT820 media | Max print width 104 mm; continuous; ribbon; 300 mm | §7.1 (300 is the ribbon size, not a page limit: round 6) |
+| 4 Patient number | Correction to round 4: not a counter. A unique number **derived from the mandatory fields** | §4.4 (supersedes the round 4 bill-style scheme; details settled in round 6) |
+
+
+### Round 6 (on revision 3.3, in chat)
+
+| Q | Answer | Applied in |
+|---|---|---|
+| 1 Patient number | For catching duplicates and faster search. A correction **updates the number**, and historic bills/reports show the updated details. Printed on **bills and reports** | §4.4, §4.8, §6.9, §7.2 |
+| 2 300 mm | The ribbon's maximum size, not a quotation page length | §7.1 (page length now follows the content) |
+
+
+### Round 7 (on revision 3.4, in chat)
+
+| Q | Answer | Applied in |
+|---|---|---|
+| 1 Duplicate patients | Impossible by definition (same full name, age, sex and phone = same person) and must not be enterable; no merge needed | §4.4 (unique `identityKey`, look-alike warning; merge proposal dropped) |
+| 2 Patient corrections | The technician proposes; a pathologist approves; the change applies only after approval | §4.2, §4.4, §5, §6.2, §8 |
+| Assumed | A pathologist's or the lead's own correction applies directly, consistent with round 4's self-approval rule. **Say if not.** | §4.2, §4.4, §8 |
+
+---
+
+## 15. Open questions
+
+None outstanding. Apart from the one assumption flagged in round 7 above, every question
+from rounds 1–7 is answered. The next step is your go-ahead for **Step 1 (Foundation)**,
+§13.
