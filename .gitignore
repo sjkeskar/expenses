@@ -6,3 +6,6 @@ node_modules/
 # Playwright E2E artefacts
 e2e/test-results/
 e2e/report/
+
+# Frontend build output (built on the server at each deploy)
+client/dist/

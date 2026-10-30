@@ -41,11 +41,9 @@ function isValidDateString(value) {
 }
 
 // 2-digit location code + 'YY' + 'MM' -> e.g. "04" + "2026-09-15" -> "042609".
-// This is the BillCounter key (and bill_number prefix) — it deliberately
-// mixes location and calendar month together, because multiple locations
-// can share the same code (confirmed decision), and the sequence counter
-// needs to be scoped to exactly what appears in the printed bill number
-// to guarantee no two bills ever collide. Pure string reformatting for
+// This is the BillCounter key (and bill_number prefix) — the sequence
+// counter is scoped to exactly what appears in the printed bill number, so
+// no two bills ever collide. Pure string reformatting for
 // the date part — no timezone math needed, since dateString is already
 // an IST calendar date, not an instant.
 function buildBillCounterKey(locationCode, dateString) {
@@ -78,10 +76,42 @@ function combineDateWithCurrentIstTime(dateString) {
   return new Date(`${dateString}T${timeString}+05:30`);
 }
 
+// Parses an API date-time (ISO 8601 with an explicit offset, e.g.
+// "2026-10-27T09:30:00+05:30", which is what the frontend's lib/ist.ts
+// sends) into a Date. A value without an offset is refused rather than
+// guessed at: it would be read in the server's timezone, never IST.
+// Returns null for empty input; throws { status: 400 } for anything else invalid.
+const OFFSET_REGEX = /(Z|[+-]\d{2}:\d{2})$/;
+
+function parseInstant(value, field) {
+  if (value === undefined || value === null || value === "") return null;
+  const date = new Date(value);
+  if (typeof value !== "string" || !OFFSET_REGEX.test(value) || Number.isNaN(date.getTime())) {
+    throw { status: 400, message: `${field} must be a date-time with a timezone offset (e.g. 2026-10-27T09:30:00+05:30).` };
+  }
+  return date;
+}
+
+// The IST calendar year of an instant.
+function getIstYear(date = new Date()) {
+  return Number(getIstDateString(date).slice(0, 4));
+}
+
+// Whole years of age on the IST calendar day of `on`, for a date-only DOB.
+function ageOn(dateOfBirth, on = new Date()) {
+  const [y, m, d] = getIstDateString(on).split("-").map(Number);
+  const dob = new Date(dateOfBirth);
+  const hadBirthday = m > dob.getUTCMonth() + 1 || (m === dob.getUTCMonth() + 1 && d >= dob.getUTCDate());
+  return y - dob.getUTCFullYear() - (hadBirthday ? 0 : 1);
+}
+
 module.exports = {
   getIstDateKey,
   getIstDateString,
   isValidDateString,
   buildBillCounterKey,
   combineDateWithCurrentIstTime,
+  parseInstant,
+  getIstYear,
+  ageOn,
 };

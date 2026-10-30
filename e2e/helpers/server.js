@@ -8,7 +8,7 @@ async function waitForUp(baseURL, timeoutMs = 15_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`${baseURL}/login.html`);
+      const res = await fetch(`${baseURL}/login`);
       if (res.ok) return;
     } catch (_) {
       // not up yet

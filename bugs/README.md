@@ -1,7 +1,14 @@
 # Bug Tracker
 
-Bugs found in the Payment Tracking System, one Markdown file per bug.
+Bugs found in the Laboratory Management System, one Markdown file per bug.
 The folder a file sits in is its status.
+
+BUG-001 to BUG-020 were found in the pre-pivot app (the payment tracking
+system and its `public/` pages, since removed; see `pivot.md`). Their fixes
+carried over into the new backend and frontend: integer-paise money
+(BUG-008), row locks (BUG-011), no raw HTML (BUG-004), double-submit guards
+(BUG-010), and the accessibility fixes, which the axe scans now gate. Their
+files still describe the old pages and tests, as a record.
 
 ```
 bugs/
@@ -47,7 +54,7 @@ expected-failure summary, run `E2E_SHOW_BUGS=1 npm run test:e2e`.
 | [BUG-003](Closed/BUG-003-stale-session-role-and-deactivation.md) | Deactivated users and demoted admins keep their access until the session expires | High | Auth / sessions | Closed |
 | [BUG-004](Closed/BUG-004-stored-xss-via-names.md) | Stored XSS: client/location/category/company/user names are rendered as HTML | Critical | All UI pages | Closed |
 | [BUG-005](Closed/BUG-005-settlement-duplicate-bill-ids-misleading-error.md) | Settlement with a repeated bill id fails with a misleading "could not be found" | Low | Settlement API | Closed |
-| [BUG-006](Open/BUG-006-no-ui-to-edit-or-delete-payments.md) | No UI to correct or delete a recorded payment | Medium | Operator/Admin UI | Open |
+| [BUG-006](Open/BUG-006-no-ui-to-edit-or-delete-payments.md) | No UI to correct or delete a recorded payment | Medium | Bill detail | Open |
 | [BUG-007](Closed/BUG-007-back-after-logout-shows-stale-page.md) | Back button after logout shows a half-working role page | Low | Auth / caching | Closed |
 | [BUG-008](Closed/BUG-008-floating-point-money-comparisons.md) | Floating-point money maths rejects exact amounts (e.g. 0.30 − 0.10) | Medium | Bills / Transactions API | Closed |
 | [BUG-009](Closed/BUG-009-combobox-stale-blur-timer.md) | Combobox list vanishes when a field is re-focused within 150 ms | Low | Shared UI (common.js) | Closed |

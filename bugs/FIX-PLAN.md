@@ -1,5 +1,8 @@
 # Fix plan for the open bugs
 
+> Historical: this plan was for the pre-pivot app and is complete. The
+> files and tests it names were retired with the old frontend (`pivot.md` §13).
+
 Written 2026-10-15, from a read of all 18 files in `Open/` checked against the
 code. Every report's root-cause line numbers were verified as accurate.
 

@@ -1,7 +1,7 @@
 # Pivot: Payment Tracking System → Laboratory Management System
 
-Status: **planning, revision 3.5 (2026-10-26).** Rounds 1 and 2 were reviewed in
-`pivot_review.txt`; rounds 3–7 arrived in chat. Every answer is applied below and
+Status: **Phase 1 built: Steps 0–7 done (2026-10-27), awaiting your review; plan revision 3.7.** Rounds 1 and 2 were reviewed in
+`pivot_review.txt`; rounds 3–8 arrived in chat. Every answer is applied below and
 traced in the decision log (§14). Remaining questions are in §15.
 
 What we built so far (a payment tracking POS) was demoed, and the brief is now a
@@ -27,7 +27,7 @@ cover what happens after billing: sample processing, results, reports and the TA
 | Quotations: 48 h validity, reserved prices, thermal print (Zebra GT820), barcode | Sample tube barcode labels on the same GT820 (§10.4) |
 | Bills, payments, panel settlement, a manually entered "report expected by" per bill | |
 | **Cancelling a single test with partial refund** (needed from day 1) | |
-| **Approvals**: every discount, cancellation and new doctor is approved by a pathologist or the lead | |
+| **Approvals**: discounts, cancellations and patient corrections (pathologist or lead); catalog changes and new doctors (lead) | |
 | Sample collection now or on a revisit, recording the revisit | |
 | Day Sheet (replaces My Bills), A4 printing, document verification | |
 | Analytics adapted to the new model | |
@@ -46,8 +46,9 @@ layer changes (§4.10). The rules that stay:
   `originalAmount / discountAmount / netAmount / balance`.
 
 Totals are now **derived from line items and money movements**, never typed in.
-**Approvals don't move money**: a discount or cancellation takes effect immediately, and
-its approval only clears a report hold (§4.2).
+**Approving doesn't move money**: a discount or cancellation takes effect immediately, and
+approving it only clears a report hold. The one exception is a **rejected discount**: it's
+reverted, so the patient owes the full amount again (§4.2).
 
 ---
 
@@ -63,7 +64,7 @@ its approval only clears a report hold (§4.2).
 | Admin (role) | **Lead pathologist** takes over its duties | Branches, panels, rates, reassignment, analytics, machines, approvals. |
 | Category | **Removed.** Replaced by **Referral** + **Payer** (§4.5) | |
 | Company | **Panel** (corporate, TPA, insurer), with its own rates | Now the *payer* on a bill. |
-| Location | **Branch** or **Collection Centre** | Each has its own location code (bill-number prefix). |
+| Location | **Branch** or **Collection Centre** | Each has its own location code (bill-number prefix). Codes are now **unique**; the old design let locations share one. |
 | My Bills | **Day Sheet** (§6.7) | |
 
 Since nothing is live, migrations are **squashed into one fresh `init` migration** (as
@@ -81,9 +82,11 @@ lead_pathologist   exactly one; everything a pathologist can do, plus: the ONLY 
                    approves others'; approves doctors; manages branches, panels/rates, machines, lab
                    name/contact; reassignment; analytics; hand-over
   └ pathologist    many, including visiting / part-time staff. Can do everything at reception a technician can
-                   (covers when technicians are on leave), approves discounts and cancellations (own included), proposes catalog
+                   (covers when technicians are on leave), approves discounts, cancellations and patient
+                   corrections (own included), proposes catalog
                    changes (applied only after the lead approves), approves reports in a later phase
-      └ technician data entry: patients, quotations, bills, payments, samples; proposes catalog changes and doctors
+      └ technician data entry: patients, quotations, bills, payments, samples; proposes catalog changes,
+                   doctors and patient corrections
 accountant         read-only; tallies all money daily, weekly and monthly for audit: analytics + PDF export,
                    any Day Sheet (§6.10)
 ```
@@ -152,7 +155,7 @@ model Approval {
   subjectId     String?          // the doctor / bill / cancellation; null for a catalog "add"
   billId        String?          // set for bill holds, so a bill's holds are one query
   payload       Json?            // catalog: proposed values. discount: old → new amount. cancellation: items, refund.
-  status        ApprovalStatus   // pending | approved | rejected
+  status        ApprovalStatus   // pending | approved | rejected | resolved (a rejected cancellation the lead has dealt with)
   requestedById String
   requestedAt   DateTime @default(now()) @db.Timestamptz(3)
   reviewedById  String?
@@ -161,9 +164,14 @@ model Approval {
 }
 ```
 
-- **Report holds**: a bill's report can be generated only when it has no pending or rejected
-  discount/cancellation approvals and its referring doctor (if any) is approved. **Phase 1
-  records and displays holds** (a "Report on hold" tag listing the reasons, on the bill and the
+- **Report holds**: a bill's report can be generated only when none of these apply:
+  - a discount or cancellation approval on the bill is **pending**
+  - a discount was **rejected** and the bill's balance isn't 0 yet (the hold lifts once it's
+    paid in full)
+  - a cancellation was **rejected** and the lead hasn't marked it **resolved**
+  - the bill names a referring doctor who isn't approved yet
+
+  **Phase 1 records and displays holds** (a "Report on hold" tag listing the reasons, on the bill and the
   Day Sheet). Report generation itself, which enforces them, comes later.
 - The discussion with the patient happens offline. The approval records that it took place.
 - A catalog approval applies its payload in the **same DB transaction** that marks it approved.
@@ -178,7 +186,7 @@ model Approval {
     so the bill shows the full amount due. The report stays held **until the full amount is
     paid**, and the hold then lifts on its own.
   - **Cancellation rejected:** the refund has already been given, so the hold stays until the
-    lead resolves it with a note, e.g. by re-billing the test.
+    lead deals with it (e.g. by re-billing the test) and marks the approval **resolved** with a note.
   - **Doctor rejected:** the doctor is dropped from every bill naming them (the referral stays
     "doctor", with no doctor named). That clears the hold, and each bill's history records the change.
 
@@ -188,7 +196,8 @@ model Approval {
 enum LocationType { branch  collection_centre }
 
 model Location {
-  // existing: id, name, locationCode (2 digits, own code per branch/centre), isActive
+  // existing: id, name, locationCode, isActive
+  // locationCode: 2 digits, now @unique (one code per branch/centre; previously shareable)
   type             LocationType
   address          String           // printed on quotations and bills
   phone            String?
@@ -206,6 +215,11 @@ Each bill records where the patient was served. `collectionMode` is `at_location
   priced at that amount. The technician may **raise** it but never lower it, and the server
   enforces the minimum. Any reduction can only come through the bill discount, which goes
   through approval.
+- The "Home visit" catalog item exists only to give the line a code and name. **Its catalog
+  price is never used.**
+- A location with **no `homeVisitCharge` set doesn't offer home visits**: the option is hidden
+  for it.
+- **Quotations can include a home visit too**, priced the same way (§4.9).
 
 ### 4.4 Patients
 
@@ -321,6 +335,7 @@ model Camp {
 ```
 
 - Only the lead edits price lists and camps.
+- **A quote or bill under a camp always uses the camp's branch/centre** as its location.
 - **Rates are prices, not discounts**, so bills priced by them need no per-bill approval. An
   extra bill discount on top still does.
 - Editing a standing price list affects new quotes and bills only. Existing ones keep their
@@ -392,8 +407,10 @@ from a price list = its custom price for the item if listed,
 A running camp beats the panel's standing list.
 
 The quote and bill forms both call it. Each line snapshots the result, so the quoted or
-billed price never changes later. Outside its scheduled period a camp's rates don't apply,
-and the server refuses to bill under a camp that isn't running.
+billed price never changes later. **A camp's scheduled period is checked when a quote is
+issued and when a bill is created directly**, and the server refuses either outside it.
+Converting a quote that's still within its 48 h keeps the quote's camp prices, even if the
+camp has ended since (§4.9).
 
 ### 4.8 Bills, line items, samples
 
@@ -444,6 +461,7 @@ model Quotation {
   verificationCode  String @unique    // random; printed as a barcode
   patientId?, patientName, patientPhone?     // a patient row is created only on conversion
   locationId                          // issuing branch/centre (its address is printed)
+  collectionMode                      // at_location | home_visit: a home visit adds the home-visit line (§4.3)
   createdById                         // issuing technician/pathologist (printed)
   referralType, referringDoctorId?, payerType, panelId?, campId?
   originalAmount, discountAmount, netAmount
@@ -454,7 +472,8 @@ model Quotation {
 ```
 
 - **Optional**: a bill doesn't need a quotation.
-- **Within 48 h**: converts at the **quoted prices**, even if the catalog changed since.
+- **Within 48 h**: converts at the **quoted prices**, even if the catalog changed since or
+  the quote's camp has ended (§4.7).
 - **After 48 h**: if every line's quoted price **still equals today's price** (§4.7, same
   payer), the same quote can still be converted. If any price changed, it must be
   **re-issued**: a new quote, new number, current prices, a fresh 48 h. The old one stays as history.
@@ -516,7 +535,7 @@ payment) stays parked.
 | Schema | Fresh squashed `init` migration with §4; DB renamed `lab_management`. |
 | `middleware/auth.js`, all routes | New role names. Pathologists get every technician permission. |
 | `services/billing.js` (new) | Patient resolution, pricing (§4.7), bill creation (shared by `POST /bills` and quote conversion), derived totals, cancellation + refund, discount changes, report-hold computation. |
-| `services/approvals.js` (new) | Create (self-approving a pathologist's or the lead's own discount or cancellation), approve, reject with the round 4 outcomes (revert the discount, drop the doctor, cancellation stays held). Per-subject rules: who may approve, apply-on-approve vs hold-clearing. |
+| `services/approvals.js` (new) | Create (self-approving a pathologist's or the lead's own discount, cancellation or patient correction), approve, reject with the round 4 outcomes (revert the discount, drop the doctor, cancellation held until marked resolved). Per-subject rules: who may approve, apply-on-approve vs hold-clearing. |
 | `routes/patients.js` | Search (`?q=` name / phone / number, incl. old numbers via aliases), create (derives the number; an exact match returns the existing patient; the unique `identityKey` blocks duplicates; look-alike warning), propose a correction (→ approval; applied on approval: re-derive, alias, audit, duplicate refused). |
 | `routes/bills.js` | Create with items, referral, payer, collection mode, draws. `GET /:id` (items, collections, payments, refunds, holds). `PATCH /:id/cancel-items`, `/discount`, `/samples`, `/expected-report`. Reassign (lead). |
 | `routes/transactions.js` | Payments as today. A payment-time discount raises an approval. |
@@ -524,7 +543,7 @@ payment) stays parked.
 | `routes/doctors.js` | List (approved + pending), propose. Approval goes through approvals. |
 | `routes/catalog.js` | Active catalog; propose (single or a grid batch); profiles with components; machine steps. |
 | `routes/machines.js`, `routes/locations.js` | Machine types, machines (lead). Locations with type, address, processing branch. |
-| `routes/approvals.js` | The queue (filtered by what the caller may approve), approve / reject with a note. |
+| `routes/approvals.js` | The queue (filtered by what the caller may approve), approve / reject with a note, mark a rejected cancellation resolved (lead). |
 | `routes/quotations.js` | Create, list, get, cancel, convert (incl. the expired-but-unchanged rule), re-issue. |
 | `routes/verify.js` | `GET /api/verify/:code` → the quote or bill it belongs to. |
 | `routes/settings.js`, `routes/users.js` | Lab settings (lead); first-run setup (developer: lab settings + first lead, only while empty); user accounts: create, deactivate, reset password (**lead only**); lead hand-over; developer re-appointment of the lead after 7 days of lead inactivity (`lastLoginAt`). |
@@ -561,7 +580,7 @@ A list of approved and pending doctors, with "Add doctor" (technician or patholo
 
 ### 6.4 Quotation
 
-Patient (search, or name + phone), branch/centre, referral, payer (+ camp), items
+Patient (search, or name + phone), branch/centre + collection mode, referral, payer (+ camp), items
 (searchable `Select` + `Form.List`, priced via §4.7), discount, totals, validity shown.
 Actions: **Save & print** (Zebra GT820), cancel, **Convert to bill**, **Re-issue** (when expired
 and prices changed). Conversion opens Create Bill prefilled.
@@ -583,10 +602,18 @@ Patients due back (today first, overdue highlighted). One click records the coll
 
 ### 6.7 Day Sheet (replaces My Bills)
 
-A spreadsheet-style grid of the **signed-in user's entries for a chosen date** (default
-today): time, bill #, patient, age/sex, items, referral, payer, net, paid, mode, balance,
-status, holds. **Totals by payment mode** at the bottom, for the cash hand-over.
-**Print (A4).** The lead and accountant can open anyone's Day Sheet.
+A spreadsheet-style view of **what the signed-in user did on a chosen date** (default
+today), in two grids:
+
+- **Money taken:** every payment, refund and panel settlement they recorded that day,
+  whichever bill it belongs to (including older bills and other users' bills). Columns: time,
+  bill #, patient, kind, amount, mode. **Totals by payment mode** at the bottom, with refunds
+  subtracted: the cash hand-over figure.
+- **Bills created:** time, bill #, patient, age/sex, items, referral, payer, net, paid,
+  balance, status, holds.
+
+The totals come from money movements, not from bills, so a period's tally (§6.10) equals the
+sum of its Day Sheets exactly. **Print (A4).** The lead and accountant can open anyone's Day Sheet.
 
 ### 6.8 Panel settlement, masters, settings, users
 
@@ -621,24 +648,33 @@ covers the chosen period:
 
 Each period's totals must equal the sum of its Day Sheets.
 
+### 6.11 Patients
+
+- **Search:** by name, phone or patient number, including old numbers kept as aliases.
+- **Register:** the same form Create Bill opens, with the duplicate block and look-alike warning (§4.4).
+- **View:** a patient's bills and quotes.
+- **Propose a correction** to a mandatory field. It applies directly for a pathologist or the
+  lead; otherwise it goes to the approval queue (§4.4). A pending correction shows on the
+  patient with its status, and only one can be pending at a time.
+
 ---
 
 ## 7. Printing
 
 | Document | Printer | Layout |
 |---|---|---|
-| Quotation | **Zebra GT820** thermal barcode printer, continuous media with ribbon (thermal transfer), shared on the LAN | 104 mm wide, as long as the content, receipt-style, single column, black only, Code 128 barcode |
+| Quotation | **Zebra GT820** thermal barcode printer, continuous fanfold media with ribbon (thermal transfer), shared on the LAN | 104 mm wide, as long as the content, receipt-style, single column, black only, Code 128 barcode |
 | Bill, Day Sheet, revisit list, analytics PDFs | **HP, A4** | Normal A4 layout with tables |
 
 ### 7.1 How: browser printing for everything
 
 Round 4 corrected the quotation printer: it's a **Zebra GT820 thermal barcode printer**, not
-a dot-matrix, on fanfold media and shared on the LAN. Printing stays **in the browser**
+a dot-matrix, on continuous fanfold media and shared on the LAN. Printing stays **in the browser**
 (round 3), through Zebra's Windows driver (ZDesigner).
 
 - Each printable document has a **print route** rendering a print-only layout with its own CSS:
   - **Quotation** (`/print/quotation/:id`): the GT820 prints at **203 dpi** with a maximum
-    print width of **104 mm** (confirmed in round 5), on **continuous** media with a ribbon
+    print width of **104 mm** (confirmed in round 5), on **continuous fanfold** media with a ribbon
     (thermal transfer). The quotation is a **narrow, receipt-style** document: one column,
     one item per line, then totals, and a footer with validity terms and barcode.
     **The page is as long as the quotation** (round 6: the 300 is the ribbon's maximum size,
@@ -651,8 +687,9 @@ a dot-matrix, on fanfold media and shared on the LAN. Printing stays **in the br
   - **A4 documents** (`/print/bill/:id`, `/print/day-sheet?date=`, …): `@page { size: A4 }`.
 
   The print button opens the route and calls `window.print()`.
-- **The driver's paper size must match the media.** Set it once per PC in the ZDesigner
-  settings, otherwise Chrome scales the page.
+- **Driver setup, once per PC:** set the ZDesigner driver to **104 mm wide, continuous
+  media**. Only the width is fixed; the length varies per quotation (above). A wrong width
+  makes Chrome scale the page.
 - **Choosing the printer:** the browser can't pick a printer itself. Staff choose the GT820
   for quotations and an HP for everything else in the print dialog, and Chrome remembers
   the last printer used. The two layouts look nothing alike, so a quotation sent to the HP
@@ -822,7 +859,14 @@ Nothing is built in Phase 1. This is noted so the printer and the per-draw model
   - quotation: 48 h validity, quoted price honoured, expired-but-unchanged converts, expired-and-changed must re-issue, double conversion refused
   - verification codes
   - home-visit charge
-  - Day Sheet totals by mode
+  - Day Sheet totals by mode include payments on older and other users' bills, minus refunds
+  - report holds:
+    - a rejected discount holds until the balance is 0
+    - a rejected cancellation holds until the lead marks it resolved
+  - a quote converted within 48 h keeps its camp prices after the camp has ended;
+    a direct bill under an ended camp is refused
+  - location codes are unique
+  - home visits are hidden where the location has no charge; a quote with a home visit
   - print views contain the required fields
   - only the lead can create or manage accounts; the developer only before first-run setup completes
   - accountant period tally equals the sum of that period's Day Sheets
@@ -870,15 +914,15 @@ client/
     lib/ist.ts  lib/money.ts
     auth/                 LoginPage, useSession, RoleRoute
     layout/AppShell.tsx   header (user, role, Change Password, Logout), role-based navigation
-    print/                A4 layouts, quotation print view (fallback), Barcode
+    print/                A4 layouts, GT820 quotation layout, Barcode
     features/
-      catalog/  approvals/  doctors/  quotations/  billing/  revisits/  daysheet/
+      patients/  catalog/  approvals/  doctors/  quotations/  billing/  revisits/  daysheet/
       panels/  masters/  settings/  users/  verify/  analytics/
 ```
 
 ### 12.4 Conventions
 
-- **IST only.** No direct dayjs calls in components; everything goes through `lib/ist.ts`.
+- **IST only.** No direct dayjs calls in components; everything goes through `lib/format.ts`.
 - **No raw HTML.** React escapes output (BUG-004), and `dangerouslySetInnerHTML` is banned
   via the ESLint `react/no-danger` rule.
 - **No double submits** (BUG-010): antd `loading` plus re-entry guards.
@@ -886,6 +930,33 @@ client/
 - **Accessibility:** labelled `Form.Item`s. The axe specs stay the gate.
 - **Motion off** when `prefers-reduced-motion: reduce`.
 - **Small components:** one per form or panel; shared bits in `src/components/`.
+
+**Layout rules** (from the review of Step 2's screens; every later screen follows them):
+- **Every screen is a `Page`** (`components/Page.tsx`): one `<h1>` title, a one-line
+  description, and the screen's main actions top right. Below it come `Section`s, 16px
+  apart, each a card whose title is an `<h2>`. No hand-made cards, headings or margins.
+- **Tables sit flush in their section** (`<Section flush>`), edge to edge, with the
+  first and last columns aligned to the section's 24px padding. Tables are `size="middle"`.
+  Short values (codes, dates, money, phone, actions) stay on one line (`NOWRAP`).
+- **Row actions are link-style buttons** (`type="link" size="small"`, `danger` for
+  destructive ones), confirmed with a `Popconfirm`. A screen's main action is the one
+  primary button in its `Page` header.
+- **Text must never look like a control.** Status is a `Badge` (dot + text), a category is
+  a `Tag`. Who is signed in is plain text in the header's account menu, which holds the
+  account actions.
+- **Forms:** vertical labels; only optional fields say "(optional)". A field that always
+  has a value (a switch, a radio group with a default) is marked `required` so it doesn't.
+  Dialogs use `FormModal`.
+- **Fields fill the width and adjust to the screen; nothing has a fixed pixel width.**
+  On a page, fields sit in an antd `<Row gutter={16}>` with the `COL` presets from
+  `components/Page.tsx`: `wide` for names and pickers, `narrow` for phone, email,
+  passwords and amounts, `full` for addresses and notes. On wide screens short fields
+  share a row; on narrow ones they stack. In dialogs every field is full width. Only the
+  login card and the side menu have fixed widths.
+- **Spacing comes from antd and these components only:** 24px page padding, 16px between
+  sections, antd's own form and card spacing. No ad-hoc margins.
+- **Check it visually.** Before a screen is done, screenshot it (and its dialogs) and look
+  at alignment and spacing; the axe scan covers contrast and semantics, not looks.
 
 ### 12.5 Server, build and deploy
 
@@ -911,17 +982,188 @@ client/
 | # | Step | Contents | Done when |
 |---|---|---|---|
 | 0 | ~~Frontend refactor~~ | **Done 2026-10-25** (shared `billing.js` / `analytics.js`, 326/326 e2e). | ✓ |
-| 1 | **Foundation (backend)** | Squashed schema (§4), DB rename, roles + lead hand-over, lab settings, locations, patients, doctors, panels + camps, catalog + machines, `Approval`, pricing, billing service. API specs updated. **The old plain-JS frontend is retired here.** | API specs green |
-| 2 | **Frontend scaffold** | Vite + React + TS + antd, login, AppShell, RoleRoute, first-run setup, user accounts (lead), lead hand-over, settings, branches, `server.js`, CSP, `deploy.ps1`. | Scaffold specs + axe green |
-| 3 | **Catalog + approvals** | Catalog table, entry grid, profiles, machines, approvals queue, doctors screen. | Catalog / approval specs green |
-| 4 | **Billing** | Create bill, bill detail, payments, discounts, cancellations + refunds, holds, revisits, panels / camps / settlement, Day Sheet, A4 prints, verification. | Billing + money specs green |
-| 5 | **Quotations** | Quote form, validity rules, conversion, re-issue, GT820 print view, barcode. | Quote specs green; **test print and scan on the real GT820** |
-| 6 | **Analytics** | Adapted and new summaries, period presets and accountant tally, PDFs. | Analytics + PDF specs green |
-| 7 | **Clean-up and docs** | Remove `public/` pages; README / REFERENCE / SETUP_GUIDE for the LMS; `bugs/` update. | — |
+| 1 | ~~**Foundation (backend)**~~ | **Done 2026-10-26** (106 API specs green; 500/500 over five parallel repeats). Squashed schema (§4), DB rename, roles + lead hand-over, lab settings, locations, patients, doctors, panels + camps, catalog + machines, `Approval`, pricing, billing service. API specs rewritten. **The old plain-JS frontend is retired here.** See §13.1. | ✓ |
+| 2 | ~~**Frontend scaffold**~~ | **Done 2026-10-27** (139 specs green: 106 API, 30 UI incl. axe on every screen, 3 session; the parallel part 655/655 over five repeats). Vite + React + TS + antd, login, AppShell, RoleRoute, first-run setup, user accounts (lead), lead hand-over, settings, branches, `server.js`, CSP, `deploy.ps1`. See §13.2. | ✓ |
+| 3 | ~~**Catalog + approvals**~~ | **Done 2026-10-27.** Catalog table, entry grid (Excel paste), profiles, machines, approval queue (bulk), My requests, doctors screen. See §13.3. | ✓ |
+| 4 | ~~**Billing**~~ | **Done 2026-10-27.** Patients (search, registration, corrections), create bill, bill detail, payments, discounts, cancellations + refunds, holds, revisits, panels / camps / settlement, Day Sheet, A4 prints, verification. | ✓ |
+| 5 | **Quotations** | **Built 2026-10-27.** Quote form, validity rules, conversion, re-issue, GT820 print view, barcode. | Specs green ✓; **test print and scan on the real GT820: yours, on site** |
+| 6 | ~~**Analytics**~~ | **Done 2026-10-27.** Referral-, payer- and test-wise summaries, period presets, the accountant's tally, PDFs. | ✓ |
+| 7 | ~~**Clean-up and docs**~~ | **Done 2026-10-27.** `public/` removed; README, REFERENCE and SETUP_GUIDE rewritten for the LMS; `bugs/` updated. | ✓ |
 
 Revision 1's one-for-one port of the old pages is dropped. The role, category and patient
 changes would throw most of it away, and with no live users there's nothing to keep
 running in between.
+
+### 13.1 Step 1: how it was built, and where it differs from the plan
+
+**Where things live:**
+- **Services:** `src/services/` (`billing`, `approvals`, `patients`, `catalog`, `doctors`,
+  `lead`, `priceLists`).
+- **Routes:** thin wrappers over the services, using `src/utils/route.js`.
+- **Approvals:** each approval kind is defined by the service that owns it
+  (`defineApproval`), next to the data it changes.
+
+**Differences from the plan:**
+- **One lead, no partial index.** Exactly-one-lead is enforced by locking the single
+  `lab_settings` row on every change of lead (`services/lead.js`), not by a partial unique
+  index. Prisma can't express partial indexes, and `prisma migrate dev` would keep trying
+  to drop one. The tests also found a race: two hand-overs sent at once both passed the
+  role check. The lock now re-checks that the sender is still the lead.
+- **Look-alike warning.** It fires on the same phone, sex and birth year (±1), instead of
+  "a similar name". That's deterministic, and it catches both spelling variants and an age
+  given a year later. Family members sharing a phone usually differ in sex or age.
+  Confirmed-distinct look-alikes (e.g. twins) are allowed.
+- **One pending discount request per bill.** Later changes, including payment-time
+  discounts, update the pending request instead of adding a new one. Its `from` stays the
+  last approved figure, so a rejection always reverts to an approved amount.
+- **Age entry.** A patient entered by age gets 1 January of the estimated birth year as an
+  approximate date of birth.
+
+**Additions to §4:**
+- `BillEvent`: a bill's history of side effects, such as a rejected doctor being dropped or
+  a rejected discount being reverted.
+- `BillItem.position` and `QuotationItem.position`: lines print in the order entered.
+- `Transaction.kind` (`payment` / `settlement`), for the Day Sheet.
+- The `resolved` approval status, with `resolvedBy`/`resolvedAt`.
+- `LeadTermReason.first_run`.
+- The reserved catalog code `HOMEVISIT`: created on first use, hidden from the catalog, and
+  never priced from the catalog.
+
+**Endpoints:**
+- `/api/bills/revisits`: pending samples due back.
+- `/api/daysheet`, `/api/verify/:code` (bills only until Step 5) and `/api/bills/preview`
+  (priced lines, totals, overlap warnings).
+
+**Left for later steps:**
+- **Quotations (Step 5):** schema only for now.
+- **Analytics (Step 6):** adapted to day-wise (payments − refunds), technician-wise,
+  location-wise and patient outstanding/daily/ledger. Category-wise is gone. Referral-,
+  payer- and test-wise and the accountant tally come in Step 6.
+- **Payment edit/delete:** still API-only (BUG-006).
+
+**Tests:**
+- The test DB is dropped and re-migrated on every run.
+- The UI specs retired with the old frontend. API specs cover every rule in §4 and §8,
+  including concurrency.
+- Lead changes run in their own serial Playwright project (`e2e/README.md`).
+
+### 13.2 Step 2: how it was built, and where it differs from the plan
+
+**Where things live:**
+- **Code:** `client/` (React 19, TypeScript 6, Vite 8, antd 6, react-router 7, dayjs). Exact
+  versions are pinned, all at least two weeks old. TypeScript stays on 6.0 because the
+  ESLint tooling doesn't support 7 yet.
+- **Single list of screens:** `client/src/pages.tsx` drives both the routes and the side
+  menu.
+- **Shared parts:** forms in dialogs (`components/FormModal.tsx`), and one hook for data
+  plus one for actions with a double-submit guard (`lib/hooks.ts`, BUG-010).
+- **Server:** `server.js` serves `client/dist` with a fallback to `index.html` for app
+  routes. The old `*.html` URLs redirect into the app, and `public/` is no longer served
+  (its removal is still Step 7). The CSP no longer allows Google Fonts.
+- **Build and lint:** `npm run build` type-checks and builds. `npm run lint` holds the
+  frontend to `react/no-danger` (BUG-004).
+- **Deploy:** `scripts/deploy.ps1` pulls, installs, generates the database client, migrates,
+  builds and restarts the service.
+
+**Differences from the plan:**
+- **Colours.** The look is antd's default, except that antd's own next-darker shade of
+  blue, red, green and grey text is used where the defaults miss WCAG AA contrast. The axe
+  scans required that (§12.4 keeps axe as the gate), and it stays close to "antd's default
+  look" (§11 Q15). It's set in `client/src/main.tsx`.
+- **Signing out reloads the page into `/login`.** A client-side navigation raced the route
+  guards and could leave a blank page after Back. The reload also drops everything the last
+  user saw from memory.
+- **Wrong current password returns 400.** Changing your password with a wrong current
+  password now returns 400 instead of 401: the session is fine, and the app treats any 401
+  as "session ended".
+- **Searchable pickers.** The pathologist and branch pickers are searchable, because a long
+  list is virtual and otherwise hides names far down.
+- **No visual baselines yet.** They wait until the screens settle. The axe scans and UI
+  specs are the gate for now.
+- **Layout review (2026-10-27).** After your review of the first screens, the frame was
+  reworked into the layout rules in §12.4:
+  - the antd base stylesheet (no browser margin above the header)
+  - an account menu in the header (the role no longer looks like a button)
+  - `Page`/`Section` frames, flush tables and link-style row actions
+  - a centred login card
+  - accurate "(optional)" marks
+  - a second review: forms and pickers no longer stop at a fixed width; they fill the
+    section through the responsive `COL` grid
+
+### 13.3 Steps 3–7: how they were built, and where they differ from the plan
+
+**Where things live:**
+- **Screens:** `client/src/features/` (one folder per area); `pages.tsx` lists
+  them all, in menu groups: Reception, Catalog, Approvals, Reports,
+  Administration.
+- **Quotes and bills share one order form:** `features/billing/order.tsx`, priced
+  live through `/api/bills/preview`.
+- **Prints:** `client/src/print/`, opened in their own tab, with the print
+  dialog opening by itself. Chrome and ZDesigner settings are in
+  `SETUP_GUIDE.md` Phase 7.
+- **New server code:** `services/quotations.js` and `routes/quotations.js`;
+  quotation conversion lives in `services/billing.js` (`quoteLines`), so a quote
+  and the bill it becomes share one pricing path.
+
+**Differences from the plan:**
+- **Re-issue link.** A re-issued quote points at the one it replaces
+  (`Quotation.reissuedFromId`). This is the one schema change since Step 1, in
+  its own migration (`20261027000000_quotation_reissue`), so your database
+  updates with `prisma migrate deploy` and keeps its data. The old quote stays
+  as it was (open, expired) and can no longer be converted. Any expired quote
+  can be re-issued, not only one whose prices changed. Its discount carries
+  over, capped at the new total.
+- **Converting a quote** takes the quote's items, referral, payer, place and
+  discount; whatever else the request says about them is ignored. The bill is
+  dated today, and the quote is linked to the patient chosen at conversion.
+  An expired quote whose camp has ended, or whose test was retired, counts as
+  changed: it must be re-issued.
+- **Machine steps in the grid** are text, so they paste from Excel: steps in
+  order separated by `>`, machines in parallel joined by `+`
+  (`Centrifuge > Haematology analyser + Biochemistry analyser`). Draws are
+  comma-separated labels (empty means one sample); a profile's tests are
+  listed by code. A profile can't be in the same batch as its new tests,
+  since its tests must already be approved.
+- **A location's type can change** (round 9, after your review). A branch becomes a
+  collection centre once it has no machines and no centre sends it samples; it then
+  names the branch that processes its samples. A centre can become a branch. The
+  location code never changes, and old bills are unaffected (they don't record the type).
+- **The front desk** (round 10). A **quick access bar** in the header gives
+  technicians New bill, New quotation and Register patient, and pathologists and the lead
+  their approval queue with its count; Alt+B, Alt+Q and Alt+P work for every reception
+  role. Home is the front desk's day: who is due back for samples, money taken, requests
+  waiting. A new bill or quote **opens on a new patient's fields**, the cursor in the name
+  (most walk-ins are new); "Returning patient? Search registered patients" switches to the
+  search, whose last line, "New patient: …", switches back with what was typed. It starts on
+  the patient instead when one is already known (opened from their page, or converting their
+  quote). A bill registers a new patient as it's created, and a look-alike is resolved in
+  the same place. The side menu
+  collapses to its icons and stays so on that PC.
+- **My requests:** a screen for every reception user, showing the requests
+  they made and the decisions on them (§6.2's "requesters see the status").
+  The queue approves or rejects in bulk.
+- **Tally details.** Discounts are those on bills raised in the period, split
+  by whether a discount approval is still pending. Panel balances are as of
+  now, not for the period.
+- **Analytics PDFs** print amounts as plain numbers under "(Rs)" headings: the
+  PDF library's built-in fonts have no ₹ sign.
+- **Conveniences:** each PC remembers the last branch it billed from, so a new
+  bill or quote starts there. Patients opens with the latest 50 registered.
+  The accountant can read bills, quotations and the catalog.
+- **Accessibility.** "Report on hold" is a badge, not a tag (the warning tag
+  missed contrast). An empty table's text uses the placeholder grey. Links
+  inside a sentence are underlined.
+
+**Not done yet:**
+- **The GT820 test print and scan** (Step 5's exit criterion) needs the real
+  printer.
+- **Visual baselines** still wait until the screens settle after your review.
+- **BUG-006** (correcting a payment from the screens) stays parked.
+
+**Tests:** API specs for every new rule (quotations, the tally against day
+sheets, referral/payer/test-wise, verify for quotes, a double conversion
+race), UI specs for every screen, and an axe scan of every screen and its
+main dialog.
 
 ---
 
@@ -955,7 +1197,7 @@ running in between.
 | 2 Lead hand-over | The lead appoints a current pathologist and is warned their account becomes pathologist; a retired lead = pathologist rights | §3.3 |
 | 3 Referring doctor | Optional. Added on a separate screen, approved by the lead; bill allowed, report held until approved | §4.5, §4.2, §6.3 |
 | 4 Panels | Company camps can get different prices or discounts | §4.5, §4.7 |
-| 5 Centres / visits | Centre → processing branch; own location code each; home visit charged per catalog; address optional | §4.3 |
+| 5 Centres / visits | Centre → processing branch; own location code each; home visit charged per catalog; address optional | §4.3 (charge superseded in round 4: per location) |
 | 6 Profiles | Must know which tests a profile covers | §4.6 |
 | 7 Quote validity | 48 h from issue. Re-issue uses new prices; an expired quote with unchanged prices stays usable | §4.9 |
 | 8 Cancellation | Discussed offline; report held until approved by a pathologist or the lead; refused once the test has started or has results | §4.10, §4.2 |
@@ -1020,10 +1262,46 @@ running in between.
 | 2 Patient corrections | The technician proposes; a pathologist approves; the change applies only after approval | §4.2, §4.4, §5, §6.2, §8 |
 | Assumed | A pathologist's or the lead's own correction applies directly, consistent with round 4's self-approval rule. **Say if not.** | §4.2, §4.4, §8 |
 
+
+### Round 8 (consistency review of revision 3.5, fixes approved in chat)
+
+| Found | Fix | Applied in |
+|---|---|---|
+| "Approvals don't move money" vs a rejected discount reverting | Approving doesn't move money; a rejected discount does | §2 |
+| The hold rule blocked forever on any rejected approval | Explicit hold conditions; a `resolved` status for rejected cancellations | §4.2, §5 |
+| Camp-ended check vs a quote's reserved camp prices | The camp period is checked at quote issue and direct billing; conversion within 48 h keeps camp prices | §4.7, §4.9 |
+| Day Sheet listed bills, but its totals must reconcile cash | Day Sheet is built from the user's money movements (payments, refunds, settlements) plus the bills they created | §6.7, §11 |
+| Driver paper size "set once" vs a per-quotation page length | The driver fixes only the width (104 mm, continuous); the length varies | §7.1 |
+| Location codes "own" vs previously shareable | Location codes are unique | §3.1, §4.3 |
+| Summaries not updated after later rounds | §1, §3.2, §5, §12.3 and the round 2 log updated | — |
+| Quotes couldn't include home visits | Quotes get a collection mode | §4.3, §4.9, §6.4 |
+| Home-visit item's catalog price; locations with no charge | Catalog price unused; no charge = no home visits from that location | §4.3 |
+| No screen for patient corrections | A Patients screen | §6.11, §13 (Step 4) |
+| A camp bill's location unstated | A camp quote or bill uses the camp's branch/centre | §4.5 |
+
+### Round 9 (review of the Phase 1 screens, in chat)
+
+| Found | Decision | Applied in |
+|---|---|---|
+| A branch couldn't be changed into a collection centre | The lead may convert a branch that has no machines; its samples go to another branch for processing. (Also refused while a centre still sends it samples; a centre can become a branch.) | §13.3, `routes/locations.js` |
+
+### Round 10 (review of the Phase 1 screens, in chat)
+
+| Found | Decision | Applied in |
+|---|---|---|
+| New bill, New quotation and Register patient took two steps; a new patient on a bill took a dialog | A quick access bar in the header (technicians: the three actions; pathologists, rarely at reception: the approval queue), keyboard shortcuts, a front-desk Home, and new patients entered inline on the bill and quote forms | §13.3, `layout/QuickAccess.tsx`, `features/patients/` |
+| A side menu that can't be hidden | Collapsible to its icons, remembered per PC | `layout/AppShell.tsx` |
+| Converting a quote meant opening it first | A Convert to bill button in each convertible quote's row (the list says which can convert now) | `routes/quotations.js`, `QuotationsPage.tsx` |
+| The 24-hour time pickers were hard for technicians | Every time is 12-hour with AM/PM: the pickers (revisit due time, report expected by, camp period), screens and prints | `lib/format.ts` (`DATE_TIME`, `formatDateTime`) |
+| Marking a revisit sample collected took one unconfirmed click | A confirmation first, on the revisit list and on the bill's Record collection | `RevisitsPage.tsx`, `BillDetailPage.tsx` |
+| The menu's groups couldn't be folded | Each group (Reception, Catalog, …) folds open and shut, remembered per PC; the icon-only menu stays flat | `layout/AppShell.tsx` |
+| Finding every test through the search was slow | A grid of 18 tiles on the bill and quote forms: chosen automatically, lab-wide, as the items billed most in the last 90 days (cancelled lines don't count), shown in code order so a tile only moves when the set changes; a new lab fills the rest from the catalog. No prices on tiles (a panel's or camp's can differ); a tile under a chosen profile says "in LIPID". The search also takes several codes at once ("CBC TSH LFT", Enter) | `GET /api/catalog/popular`, `order.tsx` |
+| Creating the bill meant scrolling back to the top | A second Create bill (and Save & print on quotes) at the end of the form, next after the payment for Tab | `NewBillPage.tsx`, `NewQuotationPage.tsx` |
+
 ---
 
 ## 15. Open questions
 
 None outstanding. Apart from the one assumption flagged in round 7 above, every question
-from rounds 1–7 is answered. The next step is your go-ahead for **Step 1 (Foundation)**,
-§13.
+from rounds 1–7 is answered, and round 8's consistency fixes are applied. Phase 1 is
+built (§13); the next step is your review of the screens, and the GT820 test print.

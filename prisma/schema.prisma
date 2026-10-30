@@ -1,3 +1,14 @@
+// Laboratory Management System — Phase 1 schema (see pivot.md §4).
+//
+// Conventions kept from the payment-tracking era:
+// - UUID primary keys everywhere; every timestamp is timestamptz, read in IST
+//   only at display/bucketing time (README "Timezone").
+// - Money is Decimal(12,2) in the database and integer paise in code
+//   (src/utils/money.js). Bill-level totals are stored, but always
+//   recomputed from items, payments and refunds (src/services/billing.js).
+// - Rows that history refers to are soft-deleted (isActive / isDeleted /
+//   status), never hard-deleted.
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,23 +19,103 @@ datasource db {
 }
 
 enum Role {
-  operator
-  admin
-  developer
-  // Read-only: full analytics access (same views as admin) plus PDF
-  // export, but no billing, promotion, or lookup-list management. See
-  // src/routes/analytics.js and public/accountant.html/js.
-  accountant
+  developer // installation + support: first-run setup, emergency lead re-appointment
+  lead_pathologist // exactly one at a time (enforced in src/services/lead.js)
+  pathologist
+  technician
+  accountant // read-only: analytics + day sheets, for audit
+}
+
+enum LeadTermReason {
+  first_run
+  handover // the lead handed over to a pathologist
+  inactive_lead // the developer re-appointed after 7 days of lead inactivity
+}
+
+enum LocationType {
+  branch
+  collection_centre
+}
+
+enum Sex {
+  male
+  female
+  other
+}
+
+enum DoctorStatus {
+  pending
+  approved
+  rejected
+}
+
+enum PanelType {
+  corporate
+  tpa
+  insurer
+}
+
+enum CatalogKind {
+  test
+  profile
+  service
+}
+
+enum CatalogStatus {
+  active
+  retired
+}
+
+enum ApprovalSubject {
+  catalog_change // applied on approval (lead)
+  referring_doctor // usable at once; holds reports until approved (lead)
+  patient_correction // applied on approval (pathologist or lead)
+  bill_discount // effective at once; holds the report (pathologist or lead)
+  bill_cancellation // effective at once; holds the report (pathologist or lead)
+}
+
+enum ApprovalStatus {
+  pending
+  approved
+  rejected
+  resolved // a rejected cancellation the lead has dealt with
+}
+
+enum ReferralType {
+  walk_in
+  doctor
+}
+
+enum PayerType {
+  self
+  panel
+}
+
+enum CollectionMode {
+  at_location
+  home_visit
 }
 
 enum BillStatus {
   pending
   fully_paid
-  // A whole bill is refunded — a terminal state, not a partial payment
-  // reversal. See the refund route in bills.js for why the whole
-  // collected amount (not a per-transaction adjustment) is what gets
-  // reversed.
-  refunded
+  cancelled // every item cancelled
+}
+
+enum BillItemStatus {
+  active
+  cancelled
+}
+
+enum ProcessingStatus {
+  not_started // the only state in Phase 1; set by the processing phase later
+  in_progress
+  completed
+}
+
+enum SampleStatus {
+  pending
+  collected
 }
 
 enum PaymentMode {
@@ -33,250 +124,514 @@ enum PaymentMode {
   upi
 }
 
-// The "action" a category triggers on the bill form. Currently only two
-// behaviors exist — standard (no extra fields) and credit (requires a
-// Company). Admin can add multiple category names under either behavior
-// (e.g. two different "standard" categories), but a genuinely NEW
-// behavior (a third type) requires code changes, not just an admin action.
-enum CategoryType {
-  standard
-  credit
+enum TransactionKind {
+  payment
+  settlement // a panel settlement closing the bill in full
+}
+
+enum QuotationStatus {
+  open // "expired" is derived: open && now > validUntil
+  converted
+  cancelled
 }
 
 // ---------------------------------------------------------------------------
-// users
-// - "name" doubles as the login identifier (must be unique) — confirmed choice.
-// - passwordHash stores an argon2 hash — confirmed choice.
-// - isDeleted / deletedAt / deletedBy implement the developer-only soft delete.
+// People and the lab itself
 // ---------------------------------------------------------------------------
+
 model User {
   id           String    @id @default(uuid())
-  name         String    @unique
-  passwordHash String
+  name         String    @unique // the login identifier
+  passwordHash String // argon2
   role         Role
+  lastLoginAt  DateTime? @db.Timestamptz(3) // drives the 7-day lead re-appointment rule
   isDeleted    Boolean   @default(false)
   deletedAt    DateTime? @db.Timestamptz(3)
   deletedById  String?
   deletedBy    User?     @relation("UserDeletions", fields: [deletedById], references: [id])
-  deletedUsers User[]    @relation("UserDeletions")
   createdAt    DateTime  @default(now()) @db.Timestamptz(3)
 
-  operatorTransactions Transaction[] @relation("OperatorTransactions")
-  createdTransactions  Transaction[] @relation("CreatedByTransactions")
-  updatedTransactions  Transaction[] @relation("UpdatedByTransactions")
-  createdBills         Bill[]        @relation("BillCreatedBy")
-  refundedBills        Bill[]        @relation("BillRefundedBy")
-
-  // Reassignment audit trail — see BillReassignment below. Three distinct
-  // roles a user can play in one reassignment event: the operator the bill
-  // moved FROM, the operator it moved TO, and the admin who performed the
-  // move. All three are kept even though "performed by" is always an admin
-  // today, because the schema shouldn't assume that stays true forever.
-  reassignmentsFrom BillReassignment[] @relation("ReassignmentFromOperator")
-  reassignmentsTo   BillReassignment[] @relation("ReassignmentToOperator")
-  reassignmentsMade BillReassignment[] @relation("ReassignmentPerformedBy")
+  deletedUsers           User[]             @relation("UserDeletions")
+  leadTerms              LeadTerm[]         @relation("LeadTermUser")
+  leadAppointments       LeadTerm[]         @relation("LeadTermAppointedBy")
+  requestedApprovals     Approval[]         @relation("ApprovalRequestedBy")
+  reviewedApprovals      Approval[]         @relation("ApprovalReviewedBy")
+  resolvedApprovals      Approval[]         @relation("ApprovalResolvedBy")
+  patientChanges         PatientChange[]    @relation("PatientChangeBy")
+  patientChangeApprovals PatientChange[]    @relation("PatientChangeApprovedBy")
+  doctorsAdded           ReferringDoctor[]
+  campsCreated           Camp[]
+  billsCreated           Bill[]             @relation("BillCreatedBy")
+  reassignmentsFrom      BillReassignment[] @relation("ReassignmentFrom")
+  reassignmentsTo        BillReassignment[] @relation("ReassignmentTo")
+  reassignmentsMade      BillReassignment[] @relation("ReassignmentBy")
+  billEvents             BillEvent[]
+  samplesCollected       SampleCollection[]
+  transactionsTaken      Transaction[]      @relation("TransactionOperator")
+  transactionsUpdated    Transaction[]      @relation("TransactionUpdatedBy")
+  cancellations          Cancellation[]
+  refunds                Refund[]
+  quotations             Quotation[]
 
   @@map("users")
 }
 
-// ---------------------------------------------------------------------------
-// clients — name only, per confirmed decision (no phone/address/etc.)
-// ---------------------------------------------------------------------------
-model Client {
-  id        String   @id @default(uuid())
-  name      String
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
+// Who was lead pathologist, when, and how they were appointed. The open
+// term (endedAt null) belongs to the current lead.
+model LeadTerm {
+  id            String         @id @default(uuid())
+  userId        String
+  user          User           @relation("LeadTermUser", fields: [userId], references: [id])
+  startedAt     DateTime       @default(now()) @db.Timestamptz(3)
+  endedAt       DateTime?      @db.Timestamptz(3)
+  reason        LeadTermReason
+  appointedById String
+  appointedBy   User           @relation("LeadTermAppointedBy", fields: [appointedById], references: [id])
 
-  bills        Bill[]
-  transactions Transaction[]
-
-  @@map("clients")
+  @@map("lead_terms")
 }
 
-// ---------------------------------------------------------------------------
-// categories — chosen per bill (not stored on the client). Admin-managed.
-// "type" determines behavior: standard = nothing extra; credit = this
-// category IS tied to one company (companyId), set when the category is
-// created — there's no separate company picker on the bill form anymore.
-// ---------------------------------------------------------------------------
-model Category {
-  id        String       @id @default(uuid())
-  name      String       @unique
-  type      CategoryType
-  isActive  Boolean      @default(true)
-  createdAt DateTime     @default(now()) @db.Timestamptz(3)
+// Single row (id = 1), created by the developer at first-run setup. Heads
+// every printed document. Only the lead pathologist edits it afterwards.
+model LabSettings {
+  id        Int      @id @default(1)
+  labName   String
+  phone     String
+  email     String?
+  address   String
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
-  // Set only when type == "credit". Populated via find-or-create by
-  // company name at category-creation time (see categories.js) — admin
-  // never manages companies through a separate screen.
-  companyId String?
-  company   Company? @relation(fields: [companyId], references: [id])
-
-  bills Bill[]
-
-  @@map("categories")
+  @@map("lab_settings")
 }
 
-// ---------------------------------------------------------------------------
-// companies — created implicitly as a side effect of adding a "credit"
-// category (find-or-create by name), never through a standalone screen.
-// A company periodically settles the balance owed across its bills — see
-// the settlement route in companies.js, which lets the person settling
-// pick exactly which of the company's bills to close (not automatic
-// FIFO), since some may be disputed and shouldn't be touched.
-// ---------------------------------------------------------------------------
-model Company {
-  id        String   @id @default(uuid())
-  name      String   @unique
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-
-  categories Category[]
-  bills      Bill[]
-
-  @@map("companies")
-}
-
-// ---------------------------------------------------------------------------
-// locations — the fixed set of shop locations a bill can be attributed to.
-// Managed exclusively by admin: add / delete (soft, via isActive — see
-// note on the DELETE route in locations.js for why it's not a hard delete).
-// ---------------------------------------------------------------------------
+// A branch processes samples; a collection centre sends its samples to one
+// processing branch. Each has its own unique 2-digit code, the prefix of
+// every bill number raised there.
 model Location {
-  id        String   @id @default(uuid())
-  name      String   @unique
-  // 2-digit code set by admin when the location is added — used as the
-  // prefix of every bill_number generated at this location. Deliberately
-  // NOT unique: multiple locations can share the same code (confirmed
-  // decision), which is why the bill-number sequence counter is keyed by
-  // this code + year + month TOGETHER (see BillCounter below), not by
-  // the location itself — otherwise two locations sharing a code could
-  // generate colliding bill numbers.
-  //
-  // Required (no nullable-for-backward-compatibility escape hatch like
-  // locationId/categoryId on Bill) — every location must have one before
-  // this migration runs, which is why test data gets truncated first.
-  locationCode String   @db.VarChar(2)
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  id                 String       @id @default(uuid())
+  name               String       @unique
+  locationCode       String       @unique @db.VarChar(2)
+  type               LocationType
+  address            String // printed on quotations and bills
+  phone              String?
+  processingBranchId String? // required for a collection centre
+  processingBranch   Location?    @relation("ProcessingBranch", fields: [processingBranchId], references: [id])
+  // Minimum home-visit charge for visits from here; null = no home visits.
+  homeVisitCharge    Decimal?     @db.Decimal(12, 2)
+  isActive           Boolean      @default(true)
+  createdAt          DateTime     @default(now()) @db.Timestamptz(3)
 
-  bills Bill[]
+  centres    Location[]  @relation("ProcessingBranch")
+  machines   Machine[]
+  camps      Camp[]
+  bills      Bill[]
+  quotations Quotation[]
 
   @@map("locations")
 }
 
 // ---------------------------------------------------------------------------
-// bills
-// - billNumber format: {locationCode}{YY}{MM}{seq} — e.g. "0426090042"
-//   (location code 04, year 2026, month 09, sequence 0042). No separator.
-//   seq is 4 digits, 0000-9999, and resets every MONTH (not daily) for
-//   each distinct locationCode — see BillCounter below.
+// Patients (pivot.md §4.4)
 // ---------------------------------------------------------------------------
-model Bill {
-  id             String     @id @default(uuid())
-  billNumber     String     @unique
-  clientId       String
-  client         Client     @relation(fields: [clientId], references: [id])
-  originalAmount Decimal    @db.Decimal(12, 2)
-  discountAmount Decimal    @default(0) @db.Decimal(12, 2)
-  netAmount      Decimal    @db.Decimal(12, 2)
-  balance        Decimal    @db.Decimal(12, 2)
-  status         BillStatus @default(pending)
-  createdAt      DateTime   @default(now()) @db.Timestamptz(3)
 
-  // Nullable on purpose: added after initial rollout, so bills created
-  // before this field existed have no attribution rather than failing
-  // to migrate. Analytics groups those under "Unattributed (legacy bills)".
-  createdById String?
-  createdBy   User?   @relation("BillCreatedBy", fields: [createdById], references: [id])
+// identityKey is the normalised name|dob|sex|phone; its unique index is what
+// makes a duplicate patient impossible to enter. patientNumber is derived
+// from it (src/utils/patientNumber.js) and re-derived when an approved
+// correction changes a mandatory field; old numbers live on as aliases.
+model Patient {
+  id               String   @id @default(uuid())
+  patientNumber    String   @unique @db.VarChar(13)
+  identityKey      String   @unique
+  name             String
+  dateOfBirth      DateTime @db.Date
+  dobIsApproximate Boolean  @default(false) // entered as an age; only the year counts
+  sex              Sex
+  phone            String   @db.VarChar(10)
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
 
-  // Nullable for the same reason as createdById above — bills created
-  // before this field existed won't have a location. New bills always
-  // get one; enforced at the application layer, not the DB, so existing
-  // data isn't broken by the migration.
-  locationId String?
-  location   Location? @relation(fields: [locationId], references: [id])
+  aliases    PatientNumberAlias[]
+  changes    PatientChange[]
+  bills      Bill[]
+  quotations Quotation[]
 
-  // Category is required for new bills (enforced at the application
-  // layer — nullable here for the same backward-compatibility reason as
-  // locationId).
-  categoryId String?
-  category   Category? @relation(fields: [categoryId], references: [id])
+  @@index([phone])
+  @@map("patients")
+}
 
-  // Copied from category.companyId at bill-creation time (see bills.js) —
-  // NOT chosen independently on the bill form. Only set when the chosen
-  // category's type is "credit"; always null for "standard" categories.
-  companyId String?
-  company   Company? @relation(fields: [companyId], references: [id])
+model PatientNumberAlias {
+  id        String   @id @default(uuid())
+  patientId String
+  patient   Patient  @relation(fields: [patientId], references: [id])
+  number    String   @unique @db.VarChar(13)
+  retiredAt DateTime @default(now()) @db.Timestamptz(3)
 
-  // Set only when status == "refunded". originalAmount/discountAmount/
-  // netAmount are deliberately left untouched by a refund (they still
-  // show what the bill was originally FOR, for audit purposes) — balance
-  // is zeroed instead (nothing further owed), and refundedAmount snapshots
-  // exactly how much had been collected at the moment of refund, since
-  // after balance is zeroed the usual "netAmount - balance" derivation
-  // can no longer be used to reconstruct that figure. See the refund
-  // route in bills.js.
-  refundedAmount Decimal?  @db.Decimal(12, 2)
-  refundedAt     DateTime? @db.Timestamptz(3)
-  refundedById   String?
-  refundedBy     User?     @relation("BillRefundedBy", fields: [refundedById], references: [id])
+  @@map("patient_number_aliases")
+}
 
-  // Full reassignment history — see BillReassignment below. Deliberately
-  // NOT a flat "lastReassignedBy/At" pair on this row: a single pair can
-  // only ever show the MOST RECENT move, silently destroying the record
-  // of every prior operator a bill passed through. The audit trail lives
-  // entirely in BillReassignment; order by reassignedAt to read the chain.
-  reassignments BillReassignment[]
+// One row per field changed by an applied correction.
+model PatientChange {
+  id           String   @id @default(uuid())
+  patientId    String
+  patient      Patient  @relation(fields: [patientId], references: [id])
+  field        String
+  oldValue     String
+  newValue     String
+  changedById  String
+  changedBy    User     @relation("PatientChangeBy", fields: [changedById], references: [id])
+  approvedById String
+  approvedBy   User     @relation("PatientChangeApprovedBy", fields: [approvedById], references: [id])
+  changedAt    DateTime @default(now()) @db.Timestamptz(3)
 
-  transactions Transaction[]
-
-  @@map("bills")
+  @@map("patient_changes")
 }
 
 // ---------------------------------------------------------------------------
-// bill_reassignments — append-only audit log for "Admin: Reassign a Bill's
-// Operator". ONE ROW PER MOVE, never updated or deleted, so the full chain
-// of custody for a bill (A -> B -> C -> ...) is always reconstructible,
-// not just the most recent step. Bill.createdById is still the CURRENT
-// operator (read directly, so every existing query — My Bills, Operator-
-// wise analytics — keeps working with zero changes); this table is purely
-// additive history layered on top of it.
-//
-// Scope is deliberately bill-only, matching the refund feature's own
-// boundary: reassigning a bill's operator does NOT touch
-// Transaction.operatorId, so payments already taken stay attributed to
-// whoever actually collected them, regardless of who the bill belongs to
-// now or belonged to before.
+// Referral and payer (pivot.md §4.5)
 // ---------------------------------------------------------------------------
+
+model ReferringDoctor {
+  id          String       @id @default(uuid())
+  name        String
+  phone       String?
+  clinic      String?
+  status      DoctorStatus @default(pending)
+  isActive    Boolean      @default(true)
+  createdById String
+  createdBy   User         @relation(fields: [createdById], references: [id])
+  createdAt   DateTime     @default(now()) @db.Timestamptz(3)
+
+  bills      Bill[]
+  quotations Quotation[]
+
+  @@map("referring_doctors")
+}
+
+// Today's "company", renamed: a corporate, TPA or insurer that pays for
+// bills on credit and settles later. May carry a standing price list.
+model Panel {
+  id          String     @id @default(uuid())
+  name        String     @unique
+  type        PanelType
+  contact     String?
+  isActive    Boolean    @default(true)
+  priceListId String?    @unique
+  priceList   PriceList? @relation(fields: [priceListId], references: [id])
+  createdAt   DateTime   @default(now()) @db.Timestamptz(3)
+
+  camps      Camp[]
+  bills      Bill[]
+  quotations Quotation[]
+
+  @@map("panels")
+}
+
+// Special rates: custom prices for listed items, and an optional % off the
+// catalog price for everything else. Used by a panel (standing rates) or a
+// camp (rates for its scheduled period only).
+model PriceList {
+  id              String          @id @default(uuid())
+  discountPercent Decimal?        @db.Decimal(5, 2)
+  items           PriceListItem[]
+  panel           Panel?
+  camp            Camp?
+
+  @@map("price_lists")
+}
+
+model PriceListItem {
+  id            String      @id @default(uuid())
+  priceListId   String
+  priceList     PriceList   @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  catalogItemId String
+  catalogItem   CatalogItem @relation(fields: [catalogItemId], references: [id])
+  price         Decimal     @db.Decimal(12, 2)
+
+  @@unique([priceListId, catalogItemId])
+  @@map("price_list_items")
+}
+
+// A company-led event: its price list applies only between startsAt and
+// endsAt, and its quotes/bills always use the camp's location.
+model Camp {
+  id          String    @id @default(uuid())
+  panelId     String
+  panel       Panel     @relation(fields: [panelId], references: [id])
+  name        String
+  venue       String?
+  locationId  String
+  location    Location  @relation(fields: [locationId], references: [id])
+  startsAt    DateTime  @db.Timestamptz(3)
+  endsAt      DateTime  @db.Timestamptz(3)
+  priceListId String    @unique
+  priceList   PriceList @relation(fields: [priceListId], references: [id])
+  isActive    Boolean   @default(true)
+  createdById String
+  createdBy   User      @relation(fields: [createdById], references: [id])
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+
+  bills      Bill[]
+  quotations Quotation[]
+
+  @@map("camps")
+}
+
+// ---------------------------------------------------------------------------
+// Catalog and machines (pivot.md §4.6)
+// ---------------------------------------------------------------------------
+
+model MachineType {
+  id       String  @id @default(uuid())
+  name     String  @unique
+  isActive Boolean @default(true)
+
+  machines     Machine[]
+  catalogSteps CatalogMachineStep[]
+
+  @@map("machine_types")
+}
+
+// A physical unit at a processing branch. Availability is a later phase.
+model Machine {
+  id            String      @id @default(uuid())
+  name          String
+  machineTypeId String
+  machineType   MachineType @relation(fields: [machineTypeId], references: [id])
+  branchId      String
+  branch        Location    @relation(fields: [branchId], references: [id])
+  isActive      Boolean     @default(true)
+
+  @@unique([branchId, name])
+  @@map("machines")
+}
+
+// A test, a profile (its tests are ProfileComponents) or a service (e.g.
+// the home-visit line). Changes proposed by technicians/pathologists live in
+// Approval until the lead approves; only then do they land here.
+model CatalogItem {
+  id           String        @id @default(uuid())
+  code         String        @unique
+  name         String
+  kind         CatalogKind
+  price        Decimal       @db.Decimal(12, 2)
+  department   String?
+  sampleType   String?
+  container    String?
+  instructions String? // patient preparation, printed on quotes and bills
+  status       CatalogStatus @default(active)
+  createdAt    DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime      @updatedAt @db.Timestamptz(3)
+
+  draws             CatalogDraw[] // tests only
+  machineSteps      CatalogMachineStep[] // tests only
+  components        ProfileComponent[]   @relation("ProfileOf") // profiles only
+  inProfiles        ProfileComponent[]   @relation("ComponentTest")
+  priceListItems    PriceListItem[]
+  billItems         BillItem[]
+  sampleCollections SampleCollection[]
+  quotationItems    QuotationItem[]
+
+  @@map("catalog_items")
+}
+
+// The sample draws a test needs, in order: "Single", or e.g. "Fasting",
+// "1 h", "2 h" for a glucose tolerance test.
+model CatalogDraw {
+  id       String      @id @default(uuid())
+  itemId   String
+  item     CatalogItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  sequence Int
+  label    String
+
+  @@unique([itemId, sequence])
+  @@map("catalog_draws")
+}
+
+// Which machine types a test runs on, in order; steps sharing a sequence
+// number run in parallel. Read by the TAT engine in a later phase.
+model CatalogMachineStep {
+  id            String      @id @default(uuid())
+  itemId        String
+  item          CatalogItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  sequence      Int
+  machineTypeId String
+  machineType   MachineType @relation(fields: [machineTypeId], references: [id])
+
+  @@unique([itemId, sequence, machineTypeId])
+  @@map("catalog_machine_steps")
+}
+
+// A test can stand alone and sit inside any number of profiles.
+model ProfileComponent {
+  profileId String
+  profile   CatalogItem @relation("ProfileOf", fields: [profileId], references: [id], onDelete: Cascade)
+  testId    String
+  test      CatalogItem @relation("ComponentTest", fields: [testId], references: [id])
+
+  @@id([profileId, testId])
+  @@map("profile_components")
+}
+
+// ---------------------------------------------------------------------------
+// Approvals (pivot.md §4.2)
+// ---------------------------------------------------------------------------
+
+// One table, one queue. subjectId points at the doctor / patient / bill /
+// cancellation / catalog item (null for a catalog "add"); billId is set for
+// approvals that hold a bill's report. A pathologist's or the lead's own
+// discount, cancellation or correction is recorded as self-approved.
+model Approval {
+  id            String          @id @default(uuid())
+  subjectType   ApprovalSubject
+  subjectId     String?
+  billId        String?
+  bill          Bill?           @relation(fields: [billId], references: [id])
+  payload       Json?
+  status        ApprovalStatus  @default(pending)
+  selfApproved  Boolean         @default(false)
+  requestedById String
+  requestedBy   User            @relation("ApprovalRequestedBy", fields: [requestedById], references: [id])
+  requestedAt   DateTime        @default(now()) @db.Timestamptz(3)
+  reviewedById  String?
+  reviewedBy    User?           @relation("ApprovalReviewedBy", fields: [reviewedById], references: [id])
+  reviewedAt    DateTime?       @db.Timestamptz(3)
+  reviewNote    String?
+  resolvedById  String?
+  resolvedBy    User?           @relation("ApprovalResolvedBy", fields: [resolvedById], references: [id])
+  resolvedAt    DateTime?       @db.Timestamptz(3)
+  resolveNote   String?
+
+  @@index([status, subjectType])
+  @@index([billId])
+  @@map("approvals")
+}
+
+// ---------------------------------------------------------------------------
+// Bills and money (pivot.md §4.8, §4.10)
+// ---------------------------------------------------------------------------
+
+// billNumber: {locationCode}{YY}{MM}{seq}, seq 0000-9999 per code per month
+// (BillCounter). Patient details are read live, never copied, so an
+// approved correction shows on every historic bill.
+model Bill {
+  id                String           @id @default(uuid())
+  billNumber        String           @unique
+  verificationCode  String           @unique // random; printed as a barcode
+  patientId         String
+  patient           Patient          @relation(fields: [patientId], references: [id])
+  locationId        String
+  location          Location         @relation(fields: [locationId], references: [id])
+  createdById       String // the bill's current technician (Reassign moves it)
+  createdBy         User             @relation("BillCreatedBy", fields: [createdById], references: [id])
+  createdAt         DateTime         @default(now()) @db.Timestamptz(3)
+  referralType      ReferralType
+  referringDoctorId String?
+  referringDoctor   ReferringDoctor? @relation(fields: [referringDoctorId], references: [id])
+  payerType         PayerType
+  panelId           String?
+  panel             Panel?           @relation(fields: [panelId], references: [id])
+  campId            String?
+  camp              Camp?            @relation(fields: [campId], references: [id])
+  collectionMode    CollectionMode   @default(at_location)
+  homeVisitAddress  String? // optional: some patients don't want it stored
+  quotationId       String?          @unique
+  quotation         Quotation?       @relation(fields: [quotationId], references: [id])
+  expectedReportAt  DateTime?        @db.Timestamptz(3) // entered by hand in Phase 1
+  originalAmount    Decimal          @db.Decimal(12, 2) // Σ active item prices
+  discountAmount    Decimal          @default(0) @db.Decimal(12, 2) // bill-level, incl. payment-time discounts
+  netAmount         Decimal          @db.Decimal(12, 2)
+  balance           Decimal          @db.Decimal(12, 2)
+  status            BillStatus       @default(pending)
+
+  items         BillItem[]
+  transactions  Transaction[]
+  cancellations Cancellation[]
+  refunds       Refund[]
+  reassignments BillReassignment[]
+  approvals     Approval[]
+  events        BillEvent[]
+
+  @@index([createdAt])
+  @@map("bills")
+}
+
+// One billed line. code/name/kind/price are snapshots, so later catalog
+// changes never alter an issued bill. A profile is one line; its tests'
+// sample draws are tracked per test in SampleCollection.
+model BillItem {
+  id               String           @id @default(uuid())
+  billId           String
+  bill             Bill             @relation(fields: [billId], references: [id])
+  position         Int // the order the lines were entered in, as printed
+  catalogItemId    String
+  catalogItem      CatalogItem      @relation(fields: [catalogItemId], references: [id])
+  code             String
+  name             String
+  kind             CatalogKind
+  price            Decimal          @db.Decimal(12, 2)
+  status           BillItemStatus   @default(active)
+  processingStatus ProcessingStatus @default(not_started)
+  cancellationId   String?
+  cancellation     Cancellation?    @relation(fields: [cancellationId], references: [id])
+
+  collections SampleCollection[]
+
+  @@map("bill_items")
+}
+
+// One draw of one test on a bill line (for a profile line, each component
+// test's draws). Pending with a dueAt = the patient is expected back.
+model SampleCollection {
+  id            String       @id @default(uuid())
+  billItemId    String
+  billItem      BillItem     @relation(fields: [billItemId], references: [id])
+  testId        String
+  test          CatalogItem  @relation(fields: [testId], references: [id])
+  sequence      Int
+  label         String
+  status        SampleStatus
+  dueAt         DateTime?    @db.Timestamptz(3)
+  collectedAt   DateTime?    @db.Timestamptz(3)
+  collectedById String?
+  collectedBy   User?        @relation(fields: [collectedById], references: [id])
+
+  @@index([status, dueAt])
+  @@map("sample_collections")
+}
+
+// Append-only: every move of a bill to another technician. Payments stay
+// attributed to whoever actually took them.
 model BillReassignment {
-  id     String @id @default(uuid())
-  billId String
-  bill   Bill   @relation(fields: [billId], references: [id])
-
-  // Nullable: the bill may have had no operator yet (a legacy bill with
-  // createdById null) when this move happened — that's a real, valid
-  // starting state, not missing data.
-  fromOperatorId String?
-  fromOperator   User?   @relation("ReassignmentFromOperator", fields: [fromOperatorId], references: [id])
-
-  toOperatorId String
-  toOperator   User   @relation("ReassignmentToOperator", fields: [toOperatorId], references: [id])
-
-  reassignedById String
-  reassignedBy   User     @relation("ReassignmentPerformedBy", fields: [reassignedById], references: [id])
-  reassignedAt   DateTime @default(now()) @db.Timestamptz(3)
+  id               String   @id @default(uuid())
+  billId           String
+  bill             Bill     @relation(fields: [billId], references: [id])
+  fromTechnicianId String
+  fromTechnician   User     @relation("ReassignmentFrom", fields: [fromTechnicianId], references: [id])
+  toTechnicianId   String
+  toTechnician     User     @relation("ReassignmentTo", fields: [toTechnicianId], references: [id])
+  reassignedById   String
+  reassignedBy     User     @relation("ReassignmentBy", fields: [reassignedById], references: [id])
+  reassignedAt     DateTime @default(now()) @db.Timestamptz(3)
 
   @@map("bill_reassignments")
 }
 
-// ---------------------------------------------------------------------------
-// bill_counters — one row per (locationCode + YY + MM) combination — e.g.
-// "042609" for code 04, year 2026, month 09. lastSequence starts at 0 for
-// the first bill in that bucket (not 1), incrementing by 1 per bill
-// thereafter, up to a max of 9999 (4-digit sequence in the bill number).
-// Incremented atomically inside a transaction to produce bill_number.
-// ---------------------------------------------------------------------------
+// Changes to a bill made as a side effect elsewhere, kept for its history
+// (e.g. a rejected doctor dropped from the bill, a rejected discount reverted).
+model BillEvent {
+  id          String   @id @default(uuid())
+  billId      String
+  bill        Bill     @relation(fields: [billId], references: [id])
+  kind        String
+  detail      Json?
+  createdById String
+  createdBy   User     @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  @@map("bill_events")
+}
+
+// Sequence counters, incremented atomically inside the creating
+// transaction: "{locationCode}{YY}{MM}" for bills, "Q…" for quotations.
 model BillCounter {
   counterKey   String @id
   lastSequence Int    @default(0)
@@ -284,33 +639,117 @@ model BillCounter {
   @@map("bill_counters")
 }
 
-// ---------------------------------------------------------------------------
-// transactions — full audit trail (created_by/updated_by) + soft delete,
-// per the original architecture doc.
-// ---------------------------------------------------------------------------
+// A payment (or a panel settlement) on a bill. discountAmount is an extra
+// discount given at payment time; it is folded into Bill.discountAmount.
 model Transaction {
-  id              String      @id @default(uuid())
+  id              String          @id @default(uuid())
   billId          String
-  bill            Bill        @relation(fields: [billId], references: [id])
-  clientId        String
-  client          Client      @relation(fields: [clientId], references: [id])
-  amountCollected Decimal     @db.Decimal(12, 2)
-  // Additional discount given AT PAYMENT TIME, on top of whatever
-  // discount the bill already had from creation. Tracked per-transaction
-  // (not just folded silently into the bill) so the ledger shows exactly
-  // when and by whom each discount was given — see transactions.js for
-  // how this keeps Bill.discountAmount/netAmount/balance all in sync.
-  discountAmount  Decimal     @default(0) @db.Decimal(12, 2)
+  bill            Bill            @relation(fields: [billId], references: [id])
+  kind            TransactionKind @default(payment)
+  amountCollected Decimal         @db.Decimal(12, 2)
+  discountAmount  Decimal         @default(0) @db.Decimal(12, 2)
   mode            PaymentMode
-  operatorId      String
-  operator        User        @relation("OperatorTransactions", fields: [operatorId], references: [id])
-  createdAt       DateTime    @default(now()) @db.Timestamptz(3)
-  createdById     String
-  createdBy       User        @relation("CreatedByTransactions", fields: [createdById], references: [id])
-  updatedAt       DateTime    @updatedAt @db.Timestamptz(3)
+  operatorId      String // who took the money
+  operator        User            @relation("TransactionOperator", fields: [operatorId], references: [id])
+  createdAt       DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime        @updatedAt @db.Timestamptz(3)
   updatedById     String?
-  updatedBy       User?       @relation("UpdatedByTransactions", fields: [updatedById], references: [id])
-  isDeleted       Boolean     @default(false)
+  updatedBy       User?           @relation("TransactionUpdatedBy", fields: [updatedById], references: [id])
+  isDeleted       Boolean         @default(false)
 
+  @@index([createdAt])
   @@map("transactions")
+}
+
+// Cancelling one or more items in one action; a refund is recorded when
+// more had been collected than the bill's new net amount.
+model Cancellation {
+  id          String   @id @default(uuid())
+  billId      String
+  bill        Bill     @relation(fields: [billId], references: [id])
+  reason      String
+  createdById String
+  createdBy   User     @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  items  BillItem[]
+  refund Refund?
+
+  @@map("cancellations")
+}
+
+model Refund {
+  id             String       @id @default(uuid())
+  billId         String
+  bill           Bill         @relation(fields: [billId], references: [id])
+  cancellationId String       @unique
+  cancellation   Cancellation @relation(fields: [cancellationId], references: [id])
+  amount         Decimal      @db.Decimal(12, 2)
+  mode           PaymentMode
+  createdById    String
+  createdBy      User         @relation(fields: [createdById], references: [id])
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+
+  @@index([createdAt])
+  @@map("refunds")
+}
+
+// ---------------------------------------------------------------------------
+// Quotations (pivot.md §4.9) — routes arrive in Step 5
+// ---------------------------------------------------------------------------
+
+// Valid 48 h from issue at the quoted prices. The patient row is created
+// only on conversion; until then the quote carries a free-text name/phone.
+model Quotation {
+  id                String           @id @default(uuid())
+  quoteNumber       String           @unique // Q + locationCode + YY + MM + seq
+  verificationCode  String           @unique
+  patientId         String?
+  patient           Patient?         @relation(fields: [patientId], references: [id])
+  patientName       String
+  patientPhone      String?
+  locationId        String
+  location          Location         @relation(fields: [locationId], references: [id])
+  collectionMode    CollectionMode   @default(at_location)
+  createdById       String
+  createdBy         User             @relation(fields: [createdById], references: [id])
+  referralType      ReferralType
+  referringDoctorId String?
+  referringDoctor   ReferringDoctor? @relation(fields: [referringDoctorId], references: [id])
+  payerType         PayerType
+  panelId           String?
+  panel             Panel?           @relation(fields: [panelId], references: [id])
+  campId            String?
+  camp              Camp?            @relation(fields: [campId], references: [id])
+  originalAmount    Decimal          @db.Decimal(12, 2)
+  discountAmount    Decimal          @default(0) @db.Decimal(12, 2)
+  netAmount         Decimal          @db.Decimal(12, 2)
+  issuedAt          DateTime         @default(now()) @db.Timestamptz(3)
+  validUntil        DateTime         @db.Timestamptz(3)
+  status            QuotationStatus  @default(open)
+  // Set on a re-issue (pivot.md §4.9): the expired quote this one replaces,
+  // which stays as history and can no longer be converted.
+  reissuedFromId    String?          @unique
+  reissuedFrom      Quotation?       @relation("Reissue", fields: [reissuedFromId], references: [id])
+  reissuedAs        Quotation?       @relation("Reissue")
+
+  items QuotationItem[]
+  bill  Bill?
+
+  @@map("quotations")
+}
+
+model QuotationItem {
+  id            String      @id @default(uuid())
+  quotationId   String
+  quotation     Quotation   @relation(fields: [quotationId], references: [id])
+  position      Int // the order the lines were entered in, as printed
+  catalogItemId String
+  catalogItem   CatalogItem @relation(fields: [catalogItemId], references: [id])
+  code          String
+  name          String
+  kind          CatalogKind
+  price         Decimal     @db.Decimal(12, 2)
+
+  @@map("quotation_items")
 }

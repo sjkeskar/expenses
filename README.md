@@ -1,166 +1,132 @@
-# Payment Tracking System
+# Laboratory Management System
 
-Implementation of the confirmed spec: Node.js/Express backend, Prisma ORM,
-PostgreSQL, server-side sessions, plain HTML/CSS/JS frontend (one page per
-role).
+A LAN-based system for a diagnostic laboratory: the test catalog, quotations,
+billing, payments, sample collection and the money reports an accountant
+audits. It runs on one Windows server PC; every other PC uses it through a
+browser.
 
-## Locked-in decisions this build follows
+**Phase 1** (this release) covers the catalog, quotations and billing. Sample
+processing, results, reports and turnaround-time calculation come in later
+phases. The plan and every decision behind it are in [`pivot.md`](pivot.md).
 
-- Backend: Node.js + Express
-- ORM: Prisma
-- Frontend: plain HTML/CSS/vanilla JS, separate page per role (no build step)
-- Auth: express-session, in-memory store, 4-hour session, cookie is `secure: false` (plain HTTP on LAN)
-- Login identifier: `name` (must be unique) — no separate username field
-- Password hashing: argon2
-- Password policy: min 6 characters, at least 1 number, at least 1 special character
-- Primary keys: UUID on every table
-- Bill numbers: `{locationCode}{YY}{MM}{seq}` — 2-digit admin-assigned location code + 2-digit year + 2-digit month + 4-digit sequence (0000-9999), no separator (e.g. `0426090042`). Resets to `0000` at the start of each calendar month, scoped per location code — NOT per individual location, since multiple locations can share the same code by design. Every location must have a code; there is no nullable fallback for this field (unlike locationId/categoryId on Bill, which stayed nullable for backward compatibility)
-- **Timezone: the system operates exclusively in India Standard Time (Asia/Kolkata, fixed UTC+5:30, no DST) — never the server's or browser's local timezone.** All timestamp columns (`createdAt`, `updatedAt`, `deletedAt`) are `timestamptz` in Postgres (see `prisma/schema.prisma`), so Postgres always stores the true UTC instant internally regardless of what timezone wrote it — there's no ambiguity to manage at the storage layer. IST enters the picture only at read/display time, via the standard `AT TIME ZONE 'Asia/Kolkata'` SQL conversion (analytics day-bucketing in `src/routes/analytics.js`) or explicit `Intl.DateTimeFormat({ timeZone: 'Asia/Kolkata' })` calls (bill number dates in `src/utils/istDate.js`, frontend display in `public/js/common.js`). If this system is ever deployed for a business outside India, those are the places to change — they must all agree with each other.
-- The Node process is still pinned to `TZ=UTC` (first line of `src/server.js`) as a defensive best practice, but this is no longer load-bearing for correctness now that columns are `timestamptz` — it's just a guard against some other future date-handling code accidentally depending on the server PC's own OS timezone.
-- First developer account: created manually via SQL script (not an auto-seed)
-- Roles: operator, admin, developer, and accountant (read-only — same analytics as admin plus PDF export, no billing/promotion/lookup-list management)
-- Categories are chosen PER BILL, not stored on the client — the same client can have bills under different categories over time. Companies are never managed on their own screen — a company is created automatically (find-or-create by name) as a side effect of adding a "credit" category, and a bill's company is copied from its category, not chosen independently on the bill form
-- Bulk settlement for a company is hand-picked, not FIFO — the person settling sees that company's actual outstanding bills (with client names) and checks off exactly which ones to close in full; anything disputed is simply left unchecked
-- Record Payment supports an optional additional discount on top of whatever discount the bill already had at creation. This is tracked per-transaction (`Transaction.discountAmount`) for audit purposes, and folds into `Bill.discountAmount`/`netAmount`/`balance` so existing analytics (which read those bill-level totals) pick it up with no separate reporting logic. Editing or deleting a transaction correctly reverses/reapplies both its amount AND its discount, not just the amount
-- Credit-category bills require a Company; the company's running balance across all its bills is settled via one lump-sum "Settle Company Balance" action, applied oldest-bill-first (FIFO)
-- Admin can reassign a bill's operator (Reassign Operator tab). Every move is recorded as a permanent, append-only `BillReassignment` row (never updated or deleted) alongside the `Bill.createdById` update, inside the same transaction — the full A→B→C history is always visible in the admin UI, not just the current operator. Payments already collected stay attributed to whoever actually took them (`Transaction.operatorId` is untouched)
-- Port: 8080
+- **Setting up a server PC:** [`SETUP_GUIDE.md`](SETUP_GUIDE.md), step by step.
+- **Finding your way around the code:** [`REFERENCE.md`](REFERENCE.md).
+- **Tests:** [`e2e/README.md`](e2e/README.md). **Known bugs:** [`bugs/`](bugs/README.md).
 
-## One-time setup on the server PC
+## What it does
 
-1. **Install prerequisites** (on the Windows server PC): Node.js (LTS) and PostgreSQL.
+| Area | What staff do |
+|---|---|
+| Front desk | A quick access bar in the header: New bill, New quotation and Register patient for technicians (also Alt+B, Alt+Q, Alt+P), the approval queue for pathologists. Home shows who is due back today and the money taken. |
+| Patients | Register (name, age or date of birth, sex, phone), search by name, phone or patient number, propose corrections. A new patient can be entered straight into a bill. Duplicates can't be entered. |
+| Catalog | Tests (with sample draws and the machines they run on), profiles (with their tests) and services, entered in a grid or pasted from Excel. The lead approves changes. |
+| Quotations | Priced quotes valid for 48 hours, printed on the Zebra GT820, converted into bills, re-issued when they expire and prices have changed. |
+| Bills | A grid of the 18 most-used tests (chosen from the last 90 days) and a search that takes several codes at once. Referral (walk-in or doctor), payer (self, or a panel with its own rates or a running camp), home visits, samples taken now or on a revisit, discounts, payments, cancelling tests with partial refunds, an A4 print with a verification barcode. |
+| Approvals | Discounts, cancellations and patient corrections (pathologists or the lead); catalog changes and new doctors (the lead). A bill's report is held until its approvals are through. |
+| Day sheet | Everything one person took and billed on a day, with the cash hand-over figure by payment mode. |
+| Analytics | The accountant's tally for any period (equal to the sum of its day sheets), plus summaries by day, staff, location, referral, payer and test, each downloadable as a PDF. |
 
-2. **Create the database and a DB user**, e.g. in psql:
-   ```sql
-   CREATE DATABASE payment_tracking;
-   CREATE USER ptsuser WITH PASSWORD 'changeme';
-   GRANT ALL PRIVILEGES ON DATABASE payment_tracking TO ptsuser;
-   ALTER USER ptsuser CREATEDB;
-   ```
-   Then connect to the new database and grant schema-level access (Postgres
-   15+ doesn't give non-owner roles `CREATE` on `public` by default):
-   ```sql
-   \c payment_tracking
-   GRANT ALL ON SCHEMA public TO ptsuser;
-   ```
-   Without these two grants you'll hit a `P3014` error and a
-   `permission denied for schema public` error respectively during migration.
+## Roles
 
-3. **Install project dependencies**:
-   ```
-   npm install
-   ```
-   This sandbox could not reach `binaries.prisma.sh` to download Prisma's
-   query engine, so `prisma generate`/`migrate` were not run here — run them
-   on the actual server PC, which will have normal internet access.
+| Role | Can |
+|---|---|
+| Lead pathologist (exactly one) | Everything a pathologist can, plus user accounts, branches, panels and camps, machines, lab settings, catalog and doctor approvals, reassigning bills, analytics, and handing over to another pathologist |
+| Pathologist | All reception work; approves discounts, cancellations and patient corrections |
+| Technician | Reception: patients, quotations, bills, payments, samples, settlement; proposes catalog changes, doctors and corrections |
+| Accountant | Read-only: bills, any day sheet, analytics with PDFs |
+| Developer | Installation only: first-run setup, and re-appointing the lead after 7 days of lead inactivity |
 
-4. **Configure environment**: copy `.env.example` to `.env` and fill in:
-   - `DATABASE_URL` — your real Postgres connection string
-   - `SESSION_SECRET` — a long random string (a command to generate one is in the file)
-   - `PORT` — leave as 8080 unless you want to change it
-   - `SESSION_MAX_AGE_MS` — leave as 14400000 (4 hours) unless you want to change it
+The server enforces every permission (`src/middleware/auth.js`). The menu
+only hides what a role can't use.
 
-5. **Run the migration** (creates all tables from `prisma/schema.prisma`):
-   ```
-   npx prisma migrate dev --name init
-   ```
-   On an **already-running install** being updated to a newer copy of this
-   project (rather than a fresh setup), running `npx prisma migrate dev`
-   again will pick up any schema changes since your last migration — e.g.
-   the `bill_reassignments` audit table — and prompt you to name a new
-   migration (e.g. `add_bill_reassignment_audit`). It will not touch your
-   existing data.
+## Stack
 
-6. **Create the first developer account** (only a developer can create other
-   users, so this one has to be inserted directly):
-   ```
-   node scripts/generate-password-hash.js "YourChosenPassword1!"
-   ```
-   Copy the printed hash into `scripts/create-first-developer.sql`
-   (replace `PASTE_ARGON2_HASH_HERE`), set the login name you want, then run:
-   ```
-   psql -U ptsuser -d payment_tracking -f scripts/create-first-developer.sql
-   ```
+- **Server:** Node.js 24 LTS, Express 4, Prisma 5 with PostgreSQL 18, argon2
+  password hashing, server-side sessions (in memory, 4 hours).
+- **Browser app:** React 19 + TypeScript + Vite, with Ant Design 6 (`client/`).
+  It is built on the server PC at every deploy, into `client/dist`, which the
+  Express server serves alongside the API. JsBarcode draws the barcodes;
+  jsPDF builds the analytics PDFs. Everything is bundled: nothing is loaded
+  from the internet.
+- **Port:** 8080. Plain HTTP on the LAN.
 
-7. **Start the server**:
-   ```
-   npm start
-   ```
-   You should see: `Payment Tracking System listening on http://0.0.0.0:8080`
+## Running it
 
-8. **Log in** at `http://localhost:8080/login.html` on the server PC with the
-   developer account you just created, then use the Developer page to create
-   your real operator and admin accounts.
-
-## Running from other PCs on the LAN
-
-- Give the server PC a static local IP (DHCP reservation on your router).
-- Allow inbound TCP on port 8080 through Windows Firewall on the server PC.
-- From any client PC, browse to `http://<server-LAN-IP>:8080/login.html`.
-
-## Keeping it running after logout / reboot
-
-Wrap `npm start` (or `node src/server.js`) as a Windows Service using NSSM
-or Task Scheduler, per Section 4 of the spec, so the app survives logout and
-restarts on reboot.
-
-## Resetting test data
-
-To wipe all business data (clients, bills, transactions, categories,
-companies, locations) and start a fresh testing session — while keeping
-every user account intact — run:
 ```
-psql -U ptsuser -d payment_tracking -f scripts/reset-test-data.sql
+npm ci                    # dependencies, including the build tools
+npx prisma migrate deploy # create or update the database tables
+npm run build             # type-check and build the browser app
+npm start                 # http://localhost:8080
 ```
-This is destructive and has no undo except restoring a backup. Only run
-it against test/staging data, never production.
 
-For go-live day (or setting up a fresh testing device from an existing
-copy of this project), see "Consolidating Migrations (Full Reset)" in
-`SETUP_GUIDE.md` — a stronger, one-script reset that also collapses the
-accumulated migration history into a single migration. That one wipes
-user accounts too, unlike the script above.
+For development, run the API and the app side by side:
 
-## Backups
+```
+npm run dev               # API on 8080, restarting on changes
+npm run dev:client        # the app with hot reload on http://localhost:5173
+```
 
-Per the spec: schedule a nightly `pg_dump` via Windows Task Scheduler and
-sync the dump folder to a cloud drive (OneDrive/Google Drive). This isn't
-automated by this codebase — set it up as an OS-level scheduled task
-pointing at your Postgres install.
+On a fresh database, create the first developer account
+(`scripts/create-first-developer.sql`), sign in as them, and open **Lab
+setup**: it records the lab's name and contact details and creates the lead
+pathologist, who then creates everyone else's account. `SETUP_GUIDE.md` walks
+through all of it.
 
-## PDF export (Analytics tab)
+To deploy a new version on the server PC, run `scripts\deploy.ps1` in an
+Administrator PowerShell: it pulls, installs, migrates, builds and restarts
+the service.
 
-Every table on the Analytics tab has a "Download PDF" button. This runs
-entirely in the browser — no server round-trip, no internet dependency —
-using [jsPDF](https://github.com/parallax/jsPDF) and its `autotable`
-plugin. Both are **self-hosted** under `public/vendor/` (not loaded from
-a CDN) specifically so this keeps working even if a client PC's internet
-connection is unreliable — this app only ever needs the LAN connection to
-the server. Both libraries are MIT-licensed; their minified browser
-builds were copied from the published npm packages and aren't part of
-this project's own server-side dependencies (`package.json` is
-untouched).
+## Rules the code keeps
+
+- **India Standard Time only.** Timestamps are stored as `timestamptz` and
+  shown or bucketed in Asia/Kolkata (`src/utils/istDate.js`,
+  `client/src/lib/format.ts`, `AT TIME ZONE` in analytics SQL), whatever
+  timezone a PC is set to.
+- **Money is integer paise on the server** (`src/utils/money.js`), never a
+  float. The browser only displays amounts; prices always come from the
+  server's pricing function.
+- **Every write that changes a bill's money locks the bill row first**
+  (`SELECT … FOR UPDATE`), so several technicians working at once can't
+  overpay or double-cancel a bill.
+- **Bill numbers** are `{locationCode}{YY}{MM}{seq}`, e.g. `0126100042`: the
+  branch or centre's 2-digit code, the year and month, and a 4-digit sequence
+  that restarts each month. Quotations use the same scheme with a `Q` in
+  front, e.g. `Q0126100007`.
+- **Patient numbers** are 13 digits derived from the patient's name, date of
+  birth, sex and phone, with a check digit. The same details always give the
+  same number. A correction re-derives it, and the old number still finds the
+  patient.
+- **Verification codes** on every quotation and bill are random 12-character
+  codes, printed as Code 128 barcodes. Scanning one on the Verify screen shows
+  the lab's own record of the document.
+- **Printing goes through the browser.** Bills, day sheets and revisit lists
+  are A4. Quotations are 104 mm wide on the Zebra GT820, and the page is as
+  long as the quotation.
 
 ## Project structure
 
 ```
-prisma/schema.prisma        Database schema (source of truth)
-src/server.js                Express app entrypoint
-src/config/                  Prisma client + session middleware
-src/middleware/auth.js       requireAuth / requireRole guards
-src/routes/                  auth, users, clients, bills, transactions, analytics
-src/utils/                   bill number generator, password policy
-public/                      login.html, operator.html, admin.html, developer.html, accountant.html + shared css/js
-scripts/                     one-time helpers for creating the first developer account
+prisma/schema.prisma       the database schema (source of truth)
+prisma/migrations/         the migrations `prisma migrate deploy` applies
+src/server.js              Express entry point: API routes, the built app, CSP
+src/routes/                one file per API area, thin wrappers over the services
+src/services/              business rules: billing, quotations, approvals, patients, catalog, …
+src/utils/                 money, IST dates, bill/patient numbers, verification codes
+client/src/                the browser app: pages.tsx lists every screen
+  features/                one folder per area (billing, catalog, patients, …)
+  print/                   the print views (A4 and GT820) and the barcode
+e2e/                       Playwright test pack (API and UI)
+scripts/                   deploy, backup, first developer, resets
+bugs/                      the bug tracker
 ```
 
-## What was verified in this environment
+## Tests
 
-- All JavaScript files pass `node --check` (syntax-valid).
-- `npm install` completed successfully.
-- Prisma schema was authored carefully against the confirmed decisions, but
-  `npx prisma validate` could not run here because this sandbox's network
-  allowlist blocks `binaries.prisma.sh` (where Prisma downloads its query
-  engine). Run `npx prisma validate` yourself right after `npm install` on
-  the server PC as a first check — if anything's off in the schema, it'll
-  fail fast and loudly there, before you run the migration.
+```
+npm run test:e2e
+```
+
+This runs the whole Playwright pack against a separate test database
+(`.env.test`), which it drops and recreates on every run. It covers the API
+permission matrix, every money and approval rule, concurrency, the screens,
+and an accessibility scan (WCAG 2.1 AA) of every screen. See `e2e/README.md`.

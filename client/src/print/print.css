@@ -1,0 +1,149 @@
+/* Print views (pivot.md §7): black on white, no greys or fills (thermal
+   printers dither them), and nothing of the app's frame. */
+.print-view {
+  background: #fff;
+  color: #000;
+  min-height: 100vh;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+.print-toolbar {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  padding: 12px;
+  border-bottom: 1px solid #d9d9d9;
+}
+.print-sheet {
+  box-sizing: border-box;
+  margin: 0 auto;
+  background: #fff;
+}
+.print-sheet.a4 {
+  width: 186mm; /* A4 less 12 mm margins */
+  padding: 8mm 0;
+  font-size: 10.5pt;
+}
+.print-sheet.thermal {
+  width: 104mm; /* the GT820's print width */
+  padding: 3mm;
+  font-size: 9pt;
+  line-height: 1.35;
+}
+.print-sheet h1 {
+  font-size: 14pt;
+  margin: 0;
+}
+.print-sheet h2 {
+  font-size: 11pt;
+  margin: 4mm 0 2mm;
+}
+.print-sheet p {
+  margin: 0;
+}
+.print-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 6mm;
+  border-bottom: 1.5px solid #000;
+  padding-bottom: 3mm;
+  margin-bottom: 3mm;
+}
+.thermal .print-head {
+  display: block;
+  text-align: center;
+}
+.thermal .print-head > div + div {
+  margin-top: 2mm;
+}
+.print-head .right {
+  text-align: right;
+}
+.print-meta {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1mm 6mm;
+  margin-bottom: 3mm;
+}
+.thermal .print-meta {
+  grid-template-columns: 1fr;
+}
+.print-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.print-table th,
+.print-table td {
+  text-align: left;
+  padding: 1.2mm 1.5mm;
+  border-bottom: 0.5px solid #000;
+  vertical-align: top;
+}
+.print-table th {
+  border-bottom: 1.5px solid #000;
+}
+.thermal .print-table th,
+.thermal .print-table td {
+  padding: 0.8mm 0;
+}
+.print-table .num {
+  text-align: right;
+  white-space: nowrap;
+}
+.print-table .sub {
+  font-size: 0.9em;
+}
+.print-table tr.cancelled td {
+  text-decoration: line-through;
+}
+.print-totals {
+  margin-left: auto;
+  margin-top: 2mm;
+  width: 75mm;
+}
+.thermal .print-totals {
+  width: 100%;
+}
+.print-totals td {
+  padding: 0.6mm 0;
+}
+.print-totals tr.strong td {
+  font-weight: 700;
+  border-top: 1.5px solid #000;
+}
+.print-foot {
+  margin-top: 5mm;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 6mm;
+  break-inside: avoid;
+}
+.thermal .print-foot {
+  display: block;
+  text-align: center;
+}
+.barcode svg {
+  display: block;
+}
+.thermal .barcode svg {
+  margin: 2mm auto 0;
+}
+.barcode-text {
+  font-family: "Courier New", monospace;
+  font-size: 10pt;
+  letter-spacing: 1px;
+  text-align: center;
+}
+@media print {
+  .print-toolbar {
+    display: none;
+  }
+  .print-sheet.a4,
+  .print-sheet.thermal {
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+}
+.thermal .print-head .right {
+  text-align: center;
+}

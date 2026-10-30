@@ -1,0 +1,18 @@
+/* The app's few global rules; everything else is antd's theme. */
+
+/* A flush section's table (components/Page.tsx) lines its first and last
+   columns up with the 24px padding every other section uses. The selector
+   has to outrank antd's own size rule (.ant-table-wrapper .ant-table.ant-table-middle …). */
+.section-flush .ant-table-wrapper .ant-table .ant-table-cell:first-child {
+  padding-inline-start: 24px;
+}
+.section-flush .ant-table-wrapper .ant-table .ant-table-cell:last-child {
+  padding-inline-end: 24px;
+}
+
+/* A link inside a line of text is underlined, not told apart by colour alone
+   (WCAG 1.4.1). */
+.ant-typography a,
+.ant-alert a {
+  text-decoration: underline;
+}

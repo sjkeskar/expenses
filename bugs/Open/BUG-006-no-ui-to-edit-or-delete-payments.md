@@ -4,12 +4,33 @@
 |---|---|
 | Status | Open (to be revisited by product owner) |
 | Severity | Medium |
-| Area | Operator / Admin UI |
+| Area | Bill detail (was: Operator / Admin UI) |
 | Reported | 2026-10-15 |
 | Found by | Test planning (feature gap); E2E `billing/record-payment.spec.js` › E16 |
 | Assignee | — |
 | Resolution | — |
 | Verified by | — |
+
+## Update 2026-10-27 (LMS pivot, Phase 1)
+
+Still open, and still parked for the product owner (`pivot.md` §4.10, §9).
+In the new app:
+
+- The endpoints remain: `PATCH /api/transactions/:id` (amount, discount,
+  mode) and `DELETE /api/transactions/:id` (soft delete). They lock the bill,
+  recompute its totals from its lines, payments and refunds, and route any
+  discount change through the discount approval. A cancelled bill's payments
+  can't change (its refunds settled it), which is what BUG-002 asked for.
+- The **Bill detail** screen lists every payment, settlement and refund, but
+  offers no edit or delete. A mis-keyed payment can only be undone by
+  cancelling tests (refunding) or through the API.
+- The open questions below now read: may technicians correct their own
+  payments, or only pathologists or the lead? Should a correction need an
+  approval, like discounts? Should a day's payments lock once its day sheet
+  is handed over?
+
+No test currently marks this bug: the pre-pivot E16 retired with the old
+pages. When it's taken up, add a UI spec on the bill detail screen first.
 
 ## Summary
 

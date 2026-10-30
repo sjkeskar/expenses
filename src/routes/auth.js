@@ -29,6 +29,10 @@ router.post("/login", async (req, res) => {
     return res.status(401).json({ error: "Invalid name or password." });
   }
 
+  // lastLoginAt drives the 7-day rule for re-appointing an unreachable lead
+  // (src/services/lead.js).
+  await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+
   // Store only what's needed in the session.
   req.session.user = {
     id: user.id,
@@ -67,9 +71,8 @@ router.get("/me", requireAuth, (req, res) => {
 //
 // Always acts on req.session.user.id — never a body-supplied user id —
 // so there's no way for this endpoint to be used to change someone
-// else's password. That's what the developer-only user-management routes
-// in users.js are for (a developer resetting another account entirely,
-// which doesn't need the current password).
+// else's password. That's what the lead's password reset in users.js is
+// for (which doesn't need the current password).
 router.patch("/password", requireAuth, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
 
@@ -91,8 +94,10 @@ router.patch("/password", requireAuth, async (req, res) => {
   }
 
   const currentMatches = await argon2.verify(user.passwordHash, currentPassword);
+  // 400, not 401: the session is fine, only the field is wrong — a 401
+  // would tell the app the session had ended and sign the user out.
   if (!currentMatches) {
-    return res.status(401).json({ error: "Current password is incorrect." });
+    return res.status(400).json({ error: "Current password is incorrect." });
   }
 
   const newPasswordHash = await argon2.hash(newPassword);

@@ -1,19 +1,19 @@
 @echo off
 REM ---------------------------------------------------------------------
-REM Nightly backup script for the Payment Tracking System database.
-REM Scheduled via Task Scheduler (see SETUP_GUIDE.md Phase 7).
+REM Nightly backup script for the Laboratory Management System database.
+REM Scheduled via Task Scheduler (see SETUP_GUIDE.md Phase 8).
 REM
 REM BEFORE FIRST USE, edit the 4 values below to match your setup.
 REM ---------------------------------------------------------------------
 
 set PGPASSWORD=changeme
-set PG_BIN="C:\Program Files\PostgreSQL\16\bin\pg_dump.exe"
+set PG_BIN="C:\Program Files\PostgreSQL\18\bin\pg_dump.exe"
 set DB_USER=ptsuser
-set DB_NAME=payment_tracking
+set DB_NAME=lab_management
 
 REM Local backup folder. Point this at a folder that OneDrive/Google Drive
 REM is already syncing, so backups leave the server PC automatically.
-set BACKUP_DIR=C:\PTS_Backups
+set BACKUP_DIR=C:\LMS_Backups
 
 REM Days to keep local backups before auto-deleting (rolling retention).
 set RETENTION_DAYS=30
@@ -28,7 +28,7 @@ REM Build a sortable timestamp: YYYYMMDD_HHMMSS
 for /f "tokens=2 delims==" %%I in ('wmic os get localdatetime /value') do set dt=%%I
 set TIMESTAMP=%dt:~0,8%_%dt:~8,6%
 
-set OUTFILE=%BACKUP_DIR%\payment_tracking_%TIMESTAMP%.dump
+set OUTFILE=%BACKUP_DIR%\lab_management_%TIMESTAMP%.dump
 
 echo Backing up %DB_NAME% to %OUTFILE% ...
 %PG_BIN% -U %DB_USER% -h localhost -d %DB_NAME% -F c -f "%OUTFILE%"

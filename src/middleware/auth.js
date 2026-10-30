@@ -52,11 +52,8 @@ async function requireAuth(req, res, next) {
 // reads req.session.user.role, which requireAuth has just refreshed from
 // the database, so a demotion takes effect on the very next request.
 //
-// This is the single source of truth for the permission matrix in
-// Section 5 of the spec:
-//   operator  -> bills/transactions only
-//   admin     -> bills/transactions + analytics + promote operator->admin
-//   developer -> user lifecycle only (create/promote/demote/deactivate)
+// Routes pass one of the role groups below (the permission matrix in
+// pivot.md §8), spread: requireRole(...RECEPTION).
 function requireRole(...roles) {
   return (req, res, next) => {
     if (!req.session || !req.session.user) {
@@ -69,4 +66,12 @@ function requireRole(...roles) {
   };
 }
 
-module.exports = { requireAuth, requireRole };
+const LEAD = ["lead_pathologist"];
+// Everyone who works the reception: patients, quotations, bills, payments, samples.
+const RECEPTION = ["technician", "pathologist", "lead_pathologist"];
+// Who may approve discounts, cancellations and patient corrections.
+const APPROVERS = ["pathologist", "lead_pathologist"];
+// Money oversight: analytics and anyone's day sheet.
+const OVERSIGHT = ["lead_pathologist", "accountant"];
+
+module.exports = { requireAuth, requireRole, LEAD, RECEPTION, APPROVERS, OVERSIGHT };

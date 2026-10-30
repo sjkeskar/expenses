@@ -13,9 +13,9 @@
 // create the Bill row, not the top-level `prisma` client. Prisma's upsert
 // is atomic at the DB level (ON CONFLICT ... DO UPDATE), so running this
 // inside the same transaction as the Bill insert guarantees no two
-// operators ever get the same bill_number for the same location-code and
-// month, even with 6+ concurrent users — including when multiple
-// locations deliberately share the same code (confirmed decision).
+// technicians ever get the same bill_number for the same location code and
+// month, even with 6+ concurrent users. (Location codes are unique since
+// the LMS pivot, so a code's sequence now belongs to exactly one location.)
 const MAX_SEQUENCE = 9999;
 
 async function generateBillNumber(tx, counterKey) {

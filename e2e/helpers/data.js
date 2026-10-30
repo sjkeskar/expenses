@@ -7,20 +7,20 @@ function uid(prefix = "e2e") {
   return `${prefix}-${Date.now().toString(36)}${crypto.randomBytes(3).toString("hex")}`;
 }
 
-// Mirrors formatCurrency() in public/js/common.js.
-function inr(value) {
-  return Number(value).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// A random 10-digit mobile number, so parallel specs never share a phone
+// (a shared phone + sex + age would trip the patient look-alike check).
+function phone() {
+  return `9${crypto.randomInt(0, 1e9).toString().padStart(9, "0")}`;
+}
+
+// An IST wall-clock time as the API expects it: "2026-10-27T09:30:00+05:30".
+function ist(yyyyMmDd, hhMm = "09:00") {
+  return `${yyyyMmDd}T${hhMm}:00+05:30`;
 }
 
 // 'YYYY-MM-DD' for the IST calendar day of the given instant.
 function istDate(date = new Date()) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(date);
-}
-
-// 'DD/MM/YYYY' — mirrors formatDate() in common.js for a YYYY-MM-DD string.
-function displayDate(yyyyMmDd) {
-  const [y, m, d] = yyyyMmDd.split("-");
-  return `${d}/${m}/${y}`;
 }
 
 // Expected bill-number prefix: {locationCode}{YY}{MM}.
@@ -32,4 +32,4 @@ function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-module.exports = { uid, inr, istDate, displayDate, billPrefix, escapeRegex };
+module.exports = { uid, phone, ist, istDate, billPrefix, escapeRegex };

@@ -1,429 +1,118 @@
 const express = require("express");
 const prisma = require("../config/prisma");
-const { requireAuth, requireRole } = require("../middleware/auth");
-const { generateBillNumber } = require("../utils/billNumber");
-const { VALID_MODES } = require("../utils/paymentModes");
-const { toPaise, fromPaise } = require("../utils/money");
-const {
-  getIstDateString,
-  isValidDateString,
-  buildBillCounterKey,
-  combineDateWithCurrentIstTime,
-} = require("../utils/istDate");
+const { requireAuth, requireRole, LEAD, RECEPTION } = require("../middleware/auth");
+const { parseInstant } = require("../utils/istDate");
+const { route, transaction } = require("../utils/route");
+const billing = require("../services/billing");
 
 const router = express.Router();
 
-// Every amount below is calculated in integer paise, never in floats —
-// see src/utils/money.js for why. The two handlers that lock a bill row
-// get an explicit timeout rather than Prisma's 5s default, since that
-// budget now has to absorb lock waits as well as the work itself.
-const TX_TIMEOUT_MS = 10_000;
+const READERS = [...RECEPTION, "accountant"];
+const LIST_INCLUDE = {
+  patient: true,
+  location: { select: { id: true, name: true } },
+  createdBy: { select: { id: true, name: true } },
+  referringDoctor: true,
+  panel: { select: { id: true, name: true } },
+  approvals: true,
+};
 
-// GET /api/bills — operator + admin.
-router.get("/", requireAuth, requireRole("operator", "admin"), async (req, res) => {
-  const bills = await prisma.bill.findMany({
-    include: {
-      client: { select: { id: true, name: true } },
-      location: { select: { id: true, name: true } },
-      category: { select: { id: true, name: true, type: true } },
-      company: { select: { id: true, name: true } },
-      createdBy: { select: { id: true, name: true } },
-      refundedBy: { select: { id: true, name: true } },
-    },
-    orderBy: { createdAt: "desc" },
-  });
-  res.json({ bills });
-});
-
-// GET /api/bills/:id — single bill + its transaction ledger.
-router.get("/:id", requireAuth, requireRole("operator", "admin"), async (req, res) => {
-  const bill = await prisma.bill.findUnique({
-    where: { id: req.params.id },
-    include: {
-      client: { select: { id: true, name: true } },
-      location: { select: { id: true, name: true } },
-      category: { select: { id: true, name: true, type: true } },
-      company: { select: { id: true, name: true } },
-      createdBy: { select: { id: true, name: true } },
-      refundedBy: { select: { id: true, name: true } },
-      // Full reassignment history, oldest first — this is the audit trail
-      // (see the BillReassignment comment in schema.prisma): every move
-      // this bill has ever made, not just the most recent one.
-      reassignments: {
-        include: {
-          fromOperator: { select: { id: true, name: true } },
-          toOperator: { select: { id: true, name: true } },
-          reassignedBy: { select: { id: true, name: true } },
-        },
-        orderBy: { reassignedAt: "asc" },
-      },
-      transactions: {
-        where: { isDeleted: false },
-        include: { operator: { select: { id: true, name: true } } },
-        orderBy: { createdAt: "asc" },
-      },
-    },
-  });
-  if (!bill) return res.status(404).json({ error: "Bill not found." });
-  res.json({ bill });
-});
-
-// POST /api/bills — operator + admin.
-// Body: { clientId?, clientName?, locationId, categoryId, originalAmount, discountAmount?, initialAmountCollected?, initialMode?, billDate? }
-//
-// locationId is required — must reference an active Location (the fixed,
-// admin-managed list of shop locations). Unlike clients, locations are
-// NOT find-or-create from free text: the picker only allows selecting an
-// existing one, since only admin can add new locations.
-//
-// categoryId is required — must reference an active Category. Same
-// pattern: not find-or-create, admin manages the list. There is NO
-// separate companyId field on a bill anymore — if the chosen category's
-// type is "credit", the bill's company is copied directly from
-// category.companyId (set when the category itself was created). This
-// means picking a credit category is enough; there's nothing else to
-// select for the company.
-//
-// Exactly one of clientId / clientName must be given:
-// - clientId: use an existing client (from the combobox selecting a match).
-// - clientName: find-or-create — looks for a client with this name
-//   (case-insensitive, trimmed) and reuses it if found, otherwise creates
-//   a new client. This is what powers "type a client name, it's created
-//   automatically if new" on the frontend.
-//
-// If initialAmountCollected is provided and > 0, a payment transaction is
-// recorded against the new bill in the SAME database transaction as the
-// bill creation — so "create bill + collect payment now" is one atomic
-// operation, matching the merged workflow on the frontend.
-//
-// billDate ('YYYY-MM-DD', IST calendar day) lets a bill be created for
-// ANY date, not just today — defaults to today (IST) if omitted. This
-// controls both the bill_number's {locationCode}{YY}{MM} prefix and the
-// bill's (and, if applicable, its initial payment's) createdAt
-// timestamp, so a backdated bill sorts and buckets in analytics under
-// the date it's actually for, not the date someone happened to enter it.
-router.post("/", requireAuth, requireRole("operator", "admin"), async (req, res) => {
-  const {
-    clientId,
-    clientName,
-    originalAmount,
-    discountAmount,
-    initialAmountCollected,
-    initialMode,
-    billDate,
-    locationId,
-    categoryId,
-  } = req.body;
-  const userId = req.session.user.id;
-
-  if (!clientId && !clientName) {
-    return res.status(400).json({ error: "clientId or clientName is required." });
-  }
-  if (!locationId) {
-    return res.status(400).json({ error: "locationId is required." });
-  }
-  if (!categoryId) {
-    return res.status(400).json({ error: "categoryId is required." });
-  }
-  if (originalAmount === undefined) {
-    return res.status(400).json({ error: "originalAmount is required." });
-  }
-
-  const resolvedBillDate = billDate || getIstDateString();
-  if (!isValidDateString(resolvedBillDate)) {
-    return res.status(400).json({ error: "billDate must be a valid date in YYYY-MM-DD format." });
-  }
-
-  const original = Number(originalAmount);
-  const discount = Number(discountAmount || 0);
-
-  if (!Number.isFinite(original) || original <= 0) {
-    return res.status(400).json({ error: "originalAmount must be a positive number." });
-  }
-  if (!Number.isFinite(discount) || discount < 0) {
-    return res.status(400).json({ error: "discountAmount cannot be negative." });
-  }
-
-  // Validated as finite numbers above, so the conversion is safe here.
-  // Everything from this point on is integer paise: a bill of 0.30 with a
-  // 0.10 discount has a net of exactly 20 paise, where the old float
-  // subtraction produced 0.19999999999999998 and then rejected a
-  // perfectly valid 0.20 payment against it.
-  const originalPaise = toPaise(original);
-  const discountPaise = toPaise(discount);
-
-  if (discountPaise > originalPaise) {
-    return res.status(400).json({ error: "discountAmount cannot exceed originalAmount." });
-  }
-
-  const netAmountPaise = originalPaise - discountPaise;
-
-  let initialAmountPaise = 0;
-  const wantsInitialPayment =
-    initialAmountCollected !== undefined && initialAmountCollected !== null && initialAmountCollected !== "";
-  if (wantsInitialPayment) {
-    const initialAmount = Number(initialAmountCollected);
-    if (!Number.isFinite(initialAmount) || initialAmount < 0) {
-      return res.status(400).json({ error: "initialAmountCollected cannot be negative." });
-    }
-    initialAmountPaise = toPaise(initialAmount);
-    if (initialAmountPaise > netAmountPaise) {
-      return res.status(400).json({ error: "Amount collected now cannot exceed the bill's net amount." });
-    }
-    if (initialAmountPaise > 0 && !VALID_MODES.includes(initialMode)) {
-      return res.status(400).json({ error: `mode must be one of: ${VALID_MODES.join(", ")}` });
-    }
-  }
-
-  try {
-    const result = await prisma.$transaction(async (tx) => {
-      let client;
-      if (clientId) {
-        client = await tx.client.findUnique({ where: { id: clientId } });
-        if (!client) {
-          throw { status: 404, message: "Client not found." };
-        }
-      } else {
-        const trimmedName = clientName.trim();
-        if (!trimmedName) {
-          throw { status: 400, message: "Client name cannot be empty." };
-        }
-        client = await tx.client.findFirst({
-          where: { name: { equals: trimmedName, mode: "insensitive" } },
-        });
-        if (!client) {
-          client = await tx.client.create({ data: { name: trimmedName } });
-        }
-      }
-
-      const location = await tx.location.findUnique({ where: { id: locationId } });
-      if (!location || !location.isActive) {
-        throw { status: 400, message: "Select a valid location from the list." };
-      }
-
-      const category = await tx.category.findUnique({ where: { id: categoryId } });
-      if (!category || !category.isActive) {
-        throw { status: 400, message: "Select a valid category from the list." };
-      }
-
-      // Company is derived from the category, not chosen independently
-      // on the bill form. A credit category always has a companyId set
-      // at creation time (enforced in categories.js) — the null check
-      // here is just a defensive guard against a misconfigured category.
-      let resolvedCompanyId = null;
-      if (category.type === "credit") {
-        if (!category.companyId) {
-          throw {
-            status: 400,
-            message: "This category has no linked company configured. Please contact an admin to fix it.",
-          };
-        }
-        resolvedCompanyId = category.companyId;
-      }
-
-      const counterKey = buildBillCounterKey(location.locationCode, resolvedBillDate);
-      const billNumber = await generateBillNumber(tx, counterKey);
-      const billTimestamp = combineDateWithCurrentIstTime(resolvedBillDate);
-      const balancePaise = netAmountPaise - initialAmountPaise;
-
-      const bill = await tx.bill.create({
-        data: {
-          billNumber,
-          clientId: client.id,
-          originalAmount: fromPaise(originalPaise),
-          discountAmount: fromPaise(discountPaise),
-          netAmount: fromPaise(netAmountPaise),
-          balance: fromPaise(balancePaise),
-          status: balancePaise <= 0 ? "fully_paid" : "pending",
-          createdById: userId,
-          createdAt: billTimestamp,
-          locationId: location.id,
-          categoryId: category.id,
-          companyId: resolvedCompanyId,
-        },
-        include: {
-          client: { select: { id: true, name: true } },
-          location: { select: { id: true, name: true } },
-          category: { select: { id: true, name: true, type: true } },
-          company: { select: { id: true, name: true } },
-        },
-      });
-
-      let transaction = null;
-      if (initialAmountPaise > 0) {
-        transaction = await tx.transaction.create({
-          data: {
-            billId: bill.id,
-            clientId: client.id,
-            amountCollected: fromPaise(initialAmountPaise),
-            mode: initialMode,
-            operatorId: userId,
-            createdById: userId,
-            // Same timestamp as the bill — the initial payment happened
-            // "on the bill's date" by definition, even if the bill is
-            // backdated.
-            createdAt: billTimestamp,
-          },
-        });
-      }
-
-      return { bill, transaction };
+// Runs a change to one bill in a transaction and answers with the bill as it now is.
+const changeBill = (fallback, change) =>
+  route(fallback, async (req, res) => {
+    const bill = await transaction(async (tx) => {
+      await change(tx, req);
+      return billing.getBill(tx, req.params.id);
     });
+    res.json({ bill });
+  });
 
-    res.status(201).json(result);
-  } catch (err) {
-    if (err && err.status) {
-      return res.status(err.status).json({ error: err.message });
-    }
-    res.status(500).json({ error: "Could not create bill." });
+// GET /api/bills?q=&status= — newest first, up to 100. q matches a bill
+// number, or a patient's name, phone or patient number.
+router.get("/", requireAuth, requireRole(...READERS), route("Could not load bills.", async (req, res) => {
+  const q = String(req.query.q || "").trim();
+  const where = {
+    ...(req.query.status && { status: req.query.status }),
+    ...(q && {
+      OR: [
+        { billNumber: q },
+        { patient: { patientNumber: q } },
+        { patient: { phone: { contains: q } } },
+        { patient: { name: { contains: q, mode: "insensitive" } } },
+      ],
+    }),
+  };
+  const bills = await prisma.bill.findMany({ where, include: LIST_INCLUDE, orderBy: { createdAt: "desc" }, take: 100 });
+  res.json({ bills: bills.map(billing.presentBill) });
+}));
+
+// GET /api/bills/revisits?until=YYYY-MM-DD — samples patients are due back
+// for, up to the end of that IST day (default: all), soonest first.
+router.get("/revisits", requireAuth, requireRole(...RECEPTION), route("Could not load revisits.", async (req, res) => {
+  const until = req.query.until ? parseInstant(`${req.query.until}T23:59:59.999+05:30`, "until") : null;
+  const collections = await prisma.sampleCollection.findMany({
+    where: { status: "pending", ...(until && { dueAt: { lte: until } }), billItem: { status: "active" } },
+    include: {
+      test: { select: { id: true, code: true, name: true } },
+      billItem: { select: { id: true, code: true, bill: { select: { id: true, billNumber: true, patient: true } } } },
+    },
+    orderBy: { dueAt: "asc" },
+  });
+  res.json({ collections });
+}));
+
+// GET /api/bills/:id — everything about one bill, with its report holds.
+router.get("/:id", requireAuth, requireRole(...READERS), route("Could not load the bill.", async (req, res) => {
+  res.json({ bill: await billing.getBill(prisma, req.params.id) });
+}));
+
+// POST /api/bills/preview — what the bill form shows before saving: priced
+// lines, totals and overlap warnings. Same body as POST /api/bills.
+router.post("/preview", requireAuth, requireRole(...RECEPTION), route("Could not price the bill.", async (req, res) => {
+  res.json(await transaction((tx) => billing.previewBill(tx, req.body)));
+}));
+
+// POST /api/bills — see createBill in services/billing.js for the body.
+router.post("/", requireAuth, requireRole(...RECEPTION), route("Could not create the bill.", async (req, res) => {
+  const bill = await transaction(async (tx) => billing.getBill(tx, await billing.createBill(tx, req.body, req.session.user)));
+  res.status(201).json({ bill });
+}));
+
+// PATCH /api/bills/:id/discount — Body: { discountAmount } (the bill-level total).
+router.patch("/:id/discount", requireAuth, requireRole(...RECEPTION), changeBill("Could not change the discount.", (tx, req) =>
+  billing.changeDiscount(tx, req.params.id, req.body.discountAmount, req.session.user)
+));
+
+// PATCH /api/bills/:id/cancel-items — Body: { itemIds, reason, discountAmount?, refundMode? }.
+router.patch("/:id/cancel-items", requireAuth, requireRole(...RECEPTION), changeBill("Could not cancel.", (tx, req) =>
+  billing.cancelItems(tx, req.params.id, req.body, req.session.user)
+));
+
+// PATCH /api/bills/:id/samples — Body: { collectionIds, collectedAt? }.
+router.patch("/:id/samples", requireAuth, requireRole(...RECEPTION), changeBill("Could not record the samples.", (tx, req) =>
+  billing.collectSamples(tx, req.params.id, req.body, req.session.user)
+));
+
+// PATCH /api/bills/:id/expected-report — Body: { expectedReportAt } (null clears it).
+router.patch("/:id/expected-report", requireAuth, requireRole(...RECEPTION), changeBill("Could not save the report time.", async (tx, req) => {
+  await billing.lockBill(tx, req.params.id);
+  await tx.bill.update({ where: { id: req.params.id }, data: { expectedReportAt: parseInstant(req.body.expectedReportAt, "expectedReportAt") } });
+}));
+
+// PATCH /api/bills/:id/reassign-technician — lead. Body: { technicianId }.
+// Moves the bill to another reception user's Day Sheet and analytics; every
+// move is kept (append-only), and payments stay with whoever took them.
+router.patch("/:id/reassign-technician", requireAuth, requireRole(...LEAD), changeBill("Could not reassign the bill.", async (tx, req) => {
+  const bill = await billing.lockBill(tx, req.params.id);
+  const target = req.body.technicianId ? await tx.user.findUnique({ where: { id: req.body.technicianId } }) : null;
+  if (!target || target.isDeleted || !RECEPTION.includes(target.role)) {
+    throw { status: 400, message: "Choose an active technician or pathologist." };
   }
-});
-
-// PATCH /api/bills/:id/refund — operator + admin.
-// Marks a whole bill as refunded. Refundable at any status as long as
-// some amount has actually been collected (pending or fully_paid) — see
-// the refundedAmount field comment in schema.prisma for why balance is
-// zeroed and refundedAmount snapshots the collected total separately,
-// rather than deriving it later from netAmount - balance.
-router.patch("/:id/refund", requireAuth, requireRole("operator", "admin"), async (req, res) => {
-  const userId = req.session.user.id;
-  try {
-    const result = await prisma.$transaction(async (tx) => {
-      // Lock the bill row BEFORE reading it, so a payment committed while
-      // we waited is included in the collected total this refund
-      // snapshots — reading first would refund a stale amount and leave
-      // refundedAmount disagreeing with the bill's own ledger.
-      await tx.$queryRaw`SELECT 1 FROM "bills" WHERE "id" = ${req.params.id} FOR UPDATE`;
-      const bill = await tx.bill.findUnique({ where: { id: req.params.id } });
-      if (!bill) {
-        throw { status: 404, message: "Bill not found." };
-      }
-      if (bill.status === "refunded") {
-        throw { status: 400, message: "This bill has already been refunded." };
-      }
-      const collectedPaise = toPaise(bill.netAmount) - toPaise(bill.balance);
-      if (collectedPaise <= 0) {
-        throw { status: 400, message: "This bill has no collected amount to refund." };
-      }
-
-      const updated = await tx.bill.update({
-        where: { id: bill.id },
-        data: {
-          status: "refunded",
-          balance: 0,
-          refundedAmount: fromPaise(collectedPaise),
-          refundedAt: new Date(),
-          refundedById: userId,
-        },
-        include: {
-          client: { select: { id: true, name: true } },
-          location: { select: { id: true, name: true } },
-          category: { select: { id: true, name: true, type: true } },
-          company: { select: { id: true, name: true } },
-          createdBy: { select: { id: true, name: true } },
-          refundedBy: { select: { id: true, name: true } },
-        },
-      });
-
-      return updated;
-    }, { timeout: TX_TIMEOUT_MS });
-
-    res.json({ bill: result });
-  } catch (err) {
-    if (err && err.status) {
-      return res.status(err.status).json({ error: err.message });
-    }
-    res.status(500).json({ error: "Could not refund bill." });
-  }
-});
-
-// PATCH /api/bills/:id/reassign-operator — admin only.
-// Body: { operatorId }
-//
-// Moves a bill to a different operator's "My Bills" and Operator-wise
-// billed totals (Bill.createdById is read directly by both, so no other
-// code needs to change). Payments already taken are NEVER touched —
-// Transaction.operatorId stays exactly as it was, matching the refund
-// feature's own "bill only" scope.
-//
-// Every move writes a BillReassignment row FIRST, inside the same
-// transaction as the createdById update, so the two can never drift apart
-// — there is no way for this bill to end up with a different current
-// operator than its own most recent audit row says. See the
-// BillReassignment comment in schema.prisma for why this is a full
-// append-only log rather than two flat columns on Bill.
-router.patch("/:id/reassign-operator", requireAuth, requireRole("admin"), async (req, res) => {
-  const { operatorId } = req.body;
-  const adminId = req.session.user.id;
-
-  if (!operatorId) {
-    return res.status(400).json({ error: "operatorId is required." });
-  }
-
-  try {
-    const result = await prisma.$transaction(async (tx) => {
-      // Lock the bill row BEFORE reading it. This is what serialises two
-      // admins moving the same bill at the same moment, and so what keeps
-      // the append-only bill_reassignments chain intact: the second move's
-      // fromOperatorId is the first move's toOperatorId, because the
-      // findUnique below only runs once the first move has committed.
-      await tx.$queryRaw`SELECT 1 FROM "bills" WHERE "id" = ${req.params.id} FOR UPDATE`;
-      const bill = await tx.bill.findUnique({ where: { id: req.params.id } });
-      if (!bill) {
-        throw { status: 404, message: "Bill not found." };
-      }
-
-      const target = await tx.user.findUnique({ where: { id: operatorId } });
-      if (!target || target.isDeleted) {
-        throw { status: 400, message: "Target user not found or is deactivated." };
-      }
-      if (!["operator", "admin"].includes(target.role)) {
-        throw { status: 400, message: "Target user must be an operator or admin." };
-      }
-      if (target.id === bill.createdById) {
-        throw { status: 400, message: "This bill is already assigned to that operator." };
-      }
-
-      await tx.billReassignment.create({
-        data: {
-          billId: bill.id,
-          fromOperatorId: bill.createdById, // may be null — a legacy, unattributed bill is a valid starting point
-          toOperatorId: target.id,
-          reassignedById: adminId,
-        },
-      });
-
-      const updated = await tx.bill.update({
-        where: { id: bill.id },
-        data: { createdById: target.id },
-        include: {
-          client: { select: { id: true, name: true } },
-          location: { select: { id: true, name: true } },
-          category: { select: { id: true, name: true, type: true } },
-          company: { select: { id: true, name: true } },
-          createdBy: { select: { id: true, name: true } },
-          refundedBy: { select: { id: true, name: true } },
-          reassignments: {
-            include: {
-              fromOperator: { select: { id: true, name: true } },
-              toOperator: { select: { id: true, name: true } },
-              reassignedBy: { select: { id: true, name: true } },
-            },
-            orderBy: { reassignedAt: "asc" },
-          },
-        },
-      });
-
-      return updated;
-    }, { timeout: TX_TIMEOUT_MS });
-
-    res.json({ bill: result });
-  } catch (err) {
-    if (err && err.status) {
-      return res.status(err.status).json({ error: err.message });
-    }
-    res.status(500).json({ error: "Could not reassign this bill's operator." });
-  }
-});
+  if (target.id === bill.createdById) throw { status: 400, message: "This bill is already assigned to them." };
+  await tx.billReassignment.create({
+    data: { billId: bill.id, fromTechnicianId: bill.createdById, toTechnicianId: target.id, reassignedById: req.session.user.id },
+  });
+  await tx.bill.update({ where: { id: bill.id }, data: { createdById: target.id } });
+}));
 
 module.exports = router;

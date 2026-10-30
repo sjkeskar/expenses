@@ -31,4 +31,19 @@ const toPaise = (v) => Math.round(Number(v) * 100);
 // form to interpolate into an error message shown to an operator.
 const fromPaise = (p) => (p / 100).toFixed(2);
 
-module.exports = { toPaise, fromPaise };
+// Validates a request amount and returns it in paise, or throws the usual
+// { status: 400 } error naming the field. Empty/omitted counts as 0 unless
+// `required`; `positive` rejects 0 as well as negatives.
+function parseMoney(value, field, { required = false, positive = false } = {}) {
+  if (value === undefined || value === null || value === "") {
+    if (required) throw { status: 400, message: `${field} is required.` };
+    return 0;
+  }
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0 || (positive && n === 0)) {
+    throw { status: 400, message: `${field} must be a ${positive ? "positive" : "non-negative"} number.` };
+  }
+  return toPaise(n);
+}
+
+module.exports = { toPaise, fromPaise, parseMoney };

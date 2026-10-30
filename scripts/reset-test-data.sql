@@ -1,39 +1,43 @@
--- Resets all business data for a fresh testing session, while keeping
--- every user account (operators/admins/developers) fully intact — you
--- won't need to recreate logins after running this.
+-- Resets all patient and billing data for a fresh testing session, while
+-- keeping the lab's setup intact: user accounts, lab settings, the lead's
+-- history, locations, the catalog, machines, panels, camps and doctors.
 --
--- Clears: transactions, bills, bill_counters (so bill numbering restarts
--- at 00001), clients, categories, companies, locations.
--- Keeps:  users.
+-- Clears: patients (and their old numbers and corrections), quotations,
+-- bills with their lines, samples, payments, cancellations, refunds,
+-- reassignments and history, every approval, and the bill/quote number
+-- counters (so numbering restarts at 0000).
 --
 -- WARNING: this is destructive and cannot be undone except by restoring
 -- from a backup. Do not run this against real production data — only
 -- against a test/staging database, or before a genuine go-live reset.
 --
 -- Run with:
---   psql -U ptsuser -d payment_tracking -f scripts/reset-test-data.sql
+--   psql -U ptsuser -d lab_management -f scripts/reset-test-data.sql
 
 BEGIN;
 
 TRUNCATE TABLE
+  "approvals",
+  "bill_events",
+  "bill_reassignments",
+  "sample_collections",
+  "refunds",
+  "cancellations",
   "transactions",
+  "bill_items",
   "bills",
+  "quotation_items",
+  "quotations",
   "bill_counters",
-  "clients",
-  "categories",
-  "companies",
-  "locations"
+  "patient_changes",
+  "patient_number_aliases",
+  "patients"
 CASCADE;
 
 COMMIT;
 
--- Quick sanity check after running: this should show 0 rows in every
--- table below except "users".
---   SELECT 'users' AS table_name, count(*) FROM "users"
---   UNION ALL SELECT 'clients', count(*) FROM "clients"
+-- Quick sanity check after running: every count should be 0.
+--   SELECT 'patients', count(*) FROM "patients"
 --   UNION ALL SELECT 'bills', count(*) FROM "bills"
---   UNION ALL SELECT 'bill_counters', count(*) FROM "bill_counters"
 --   UNION ALL SELECT 'transactions', count(*) FROM "transactions"
---   UNION ALL SELECT 'categories', count(*) FROM "categories"
---   UNION ALL SELECT 'companies', count(*) FROM "companies"
---   UNION ALL SELECT 'locations', count(*) FROM "locations";
+--   UNION ALL SELECT 'approvals', count(*) FROM "approvals";

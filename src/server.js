@@ -8,19 +8,16 @@
 process.env.TZ = "UTC";
 
 require("dotenv").config();
+const fs = require("fs");
 const path = require("path");
 const express = require("express");
 const sessionMiddleware = require("./config/session");
 
-const authRoutes = require("./routes/auth");
-const userRoutes = require("./routes/users");
-const clientRoutes = require("./routes/clients");
-const billRoutes = require("./routes/bills");
-const transactionRoutes = require("./routes/transactions");
-const analyticsRoutes = require("./routes/analytics");
-const locationRoutes = require("./routes/locations");
-const categoryRoutes = require("./routes/categories");
-const companyRoutes = require("./routes/companies");
+// Each is mounted at /api/<name> from src/routes/<name>.js.
+const API_ROUTES = [
+  "auth", "users", "settings", "locations", "patients", "doctors", "panels", "camps",
+  "catalog", "machines", "approvals", "quotations", "bills", "transactions", "daysheet", "verify", "analytics",
+];
 
 if (!process.env.SESSION_SECRET) {
   console.error("SESSION_SECRET is not set. Copy .env.example to .env and fill it in.");
@@ -60,32 +57,18 @@ const app = express();
 app.use(express.json());
 app.use(sessionMiddleware);
 
-// Content-Security-Policy — defence in depth behind escapeHtml() in
-// public/js/common.js, so that a future unescaped interpolation is a bug
-// rather than a working stored-XSS hole (see bugs/Closed/BUG-004).
-// Applies to every response, including the role pages themselves.
+// Content-Security-Policy — defence in depth behind React's escaping, so
+// that a future raw-HTML slip is a bug rather than a working stored-XSS hole
+// (see bugs/Closed/BUG-004). Applies to every response.
 //
-// Two notes for anyone tempted to tighten this later:
-//
-// - script-src 'self' is what actually neutralises an injected
-//   `onerror=` handler. It is safe as written because there is not one
-//   inline <script> block or on*= attribute anywhere in public/*.html —
-//   all page scripts are separate files under public/js and
-//   public/vendor. Keep it that way.
-// - style-src MUST keep 'unsafe-inline'. CSP's style-src governs inline
-//   style="..." attributes too, and the pages carry 68 of them
-//   (admin.html 37, operator.html 16, accountant.html 11,
-//   developer.html 4) — they are how every modal and collapsed panel is
-//   shown and hidden. Dropping 'unsafe-inline' silently breaks all of
-//   them, with no error beyond a console warning.
-//
-// The font directives are for the Google Fonts stylesheet the pages link.
-const CSP =
-  "default-src 'self'; " +
-  "script-src 'self'; " +
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-  "font-src https://fonts.gstatic.com; " +
-  "img-src 'self' data:";
+// - script-src 'self' is what neutralises an injected `onerror=` handler.
+//   It holds because the built app (client/dist) has no inline script: Vite
+//   emits one external module. Keep it that way.
+// - style-src keeps 'unsafe-inline': antd injects its component styles as
+//   <style> tags at runtime.
+// - Everything else is 'self': fonts are the OS's own (antd's default font
+//   stack), so nothing loads from the internet — the app only needs the LAN.
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:";
 
 app.use((req, res, next) => {
   res.set("Content-Security-Policy", CSP);
@@ -93,12 +76,10 @@ app.use((req, res, next) => {
 });
 
 // Never let a browser cache an API response. Without this, pressing Back
-// after logging out re-rendered a role page from cache: the HTML and the
-// /api/auth/me response both came from the disk cache, so guardPage() in
-// public/js/common.js saw a stale 200 with the old user still in it and
-// left the page sitting there half-working (see bugs/Closed/BUG-007).
-// With no-store the Back navigation re-requests /api/auth/me, gets a real
-// 401, and guardPage() redirects to login as it already knows how to.
+// after signing out re-rendered a page from cache with a stale 200 from
+// /api/auth/me still in it (see bugs/Closed/BUG-007). With no-store, the
+// app's session check (client/src/auth/session.tsx) always gets a real
+// answer, and a 401 sends the user to the login page.
 //
 // Must come above the route mounts so it applies to every /api/* response.
 app.use("/api", (req, res, next) => {
@@ -107,27 +88,23 @@ app.use("/api", (req, res, next) => {
 });
 
 // API routes
-app.use("/api/auth", authRoutes);
-app.use("/api/users", userRoutes);
-app.use("/api/clients", clientRoutes);
-app.use("/api/bills", billRoutes);
-app.use("/api/transactions", transactionRoutes);
-app.use("/api/analytics", analyticsRoutes);
-app.use("/api/locations", locationRoutes);
-app.use("/api/categories", categoryRoutes);
-app.use("/api/companies", companyRoutes);
+for (const name of API_ROUTES) app.use(`/api/${name}`, require(`./routes/${name}`));
 
-// Root path has no index.html of its own — redirect straight to the
-// login page instead of a blank 404, so people don't need to know/type
-// the exact filename to get started.
-app.get("/", (req, res) => {
-  res.redirect("/login.html");
-});
+// The React app (client/, built into client/dist by `npm run build`). Its
+// routes live in the browser, so any other GET without a file extension
+// gets index.html. The pre-pivot pages' URLs redirect into the app, so
+// bookmarks on the client PCs keep working.
+const CLIENT_DIST = path.join(__dirname, "..", "client", "dist");
+if (!fs.existsSync(path.join(CLIENT_DIST, "index.html"))) {
+  console.warn("client/dist is missing — run `npm run build` to build the frontend. The API works without it.");
+}
+const LEGACY_PAGES = { "/login.html": "/login", "/operator.html": "/", "/admin.html": "/", "/accountant.html": "/", "/developer.html": "/" };
 
-// Static frontend (plain HTML/CSS/JS, separate page per role — confirmed decision)
-app.use(express.static(path.join(__dirname, "..", "public")));
+app.get(Object.keys(LEGACY_PAGES), (req, res) => res.redirect(301, LEGACY_PAGES[req.path]));
+app.use(express.static(CLIENT_DIST, { index: false }));
+app.get(/^\/(?!api\/)[^.]*$/, (req, res) => res.sendFile(path.join(CLIENT_DIST, "index.html")));
 
-// Fallback 404 for unknown API routes (keep after static so real files still resolve)
+// Fallback 404 for unknown API routes
 app.use("/api", (req, res) => {
   res.status(404).json({ error: "Not found." });
 });
@@ -146,5 +123,5 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log(`Payment Tracking System listening on http://0.0.0.0:${PORT}`);
+  console.log(`Laboratory Management System listening on http://0.0.0.0:${PORT}`);
 });

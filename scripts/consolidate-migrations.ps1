@@ -28,8 +28,8 @@ if ($confirm -ne "YES") {
     exit 0
 }
 
-$dbName = Read-Host "Database name [payment_tracking]"
-if ([string]::IsNullOrWhiteSpace($dbName)) { $dbName = "payment_tracking" }
+$dbName = Read-Host "Database name [lab_management]"
+if ([string]::IsNullOrWhiteSpace($dbName)) { $dbName = "lab_management" }
 
 $dbUser = Read-Host "Application DB user [ptsuser]"
 if ([string]::IsNullOrWhiteSpace($dbUser)) { $dbUser = "ptsuser" }
