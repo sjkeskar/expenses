@@ -69,3 +69,4 @@ expected-failure summary, run `E2E_SHOW_BUGS=1 npm run test:e2e`.
 | [BUG-018](Closed/BUG-018-tab-from-combobox-loses-focus.md) | Tabbing out of a search field with a long list loses keyboard focus | Medium | Shared UI (common.js) | Closed |
 | [BUG-019](Closed/BUG-019-settle-list-double-load-wipes-ticks.md) | Picking a settlement company loads its bills twice; the second load wipes ticked bills | Medium | Operator/Admin UI | Closed |
 | [BUG-020](Closed/BUG-020-settle-list-not-refreshed-after-failed-settlement.md) | After a failed settlement, the settle list can't be refreshed by re-picking the company | Low | Operator/Admin UI | Closed |
+| [BUG-021](Closed/BUG-021-missing-record-shows-blank-page.md) | A record that can't be loaded shows a blank page, with no message | Low | Detail pages (UI) | Closed |

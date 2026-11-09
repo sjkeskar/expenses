@@ -12,12 +12,17 @@ import type { LabSettings, LeadStatus } from "../../types/api";
 // The developer's page (pivot.md §3.3–3.4): first-run setup while the lab
 // isn't set up yet; afterwards, re-appointing the lead when they haven't
 // signed in for 7 days.
+// The settings are this screen's own data, loaded here (a failure shows on
+// the screen); the header's copy is refreshed with them.
 export default function SetupPage() {
-  const { settings, reloadSettings } = useShell();
-  if (settings === undefined) return null;
+  const { reloadSettings } = useShell();
+  const own = useApi<{ settings: LabSettings | null }>("/settings");
+  if (!own.data) return null;
+  const { settings } = own.data;
+  const done = () => Promise.all([own.reload(), reloadSettings()]).then(() => undefined);
   return (
     <Page title="Lab setup" description={settings === null ? "Set up the lab once, before anyone else signs in." : "The lab's details and its lead pathologist."}>
-      {settings === null ? <FirstRunSetup onDone={reloadSettings} /> : <LeadReappointment settings={settings} />}
+      {settings === null ? <FirstRunSetup onDone={done} /> : <LeadReappointment settings={settings} />}
     </Page>
   );
 }

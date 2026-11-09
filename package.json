@@ -45,5 +45,11 @@
     "typescript": "6.0.3",
     "typescript-eslint": "8.71.2",
     "vite": "8.3.4"
+  },
+  "allowScripts": {
+    "argon2@0.41.1": true,
+    "prisma@5.22.0": true,
+    "@prisma/client@5.22.0": true,
+    "@prisma/engines@5.22.0": true
   }
 }

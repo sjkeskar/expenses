@@ -5,7 +5,7 @@ import { DownOutlined, KeyOutlined, LogoutOutlined, MenuFoldOutlined, MenuUnfold
 import { REMINDER_KEY, useSession } from "../auth/session";
 import { useApi } from "../lib/hooks";
 import { ROLE_LABELS } from "../lib/format";
-import { PAGES, type Page } from "../pages";
+import { menuEntryFor, PAGES, type Page } from "../pages";
 import type { LabSettings, Role } from "../types/api";
 import ChangePasswordModal from "./ChangePasswordModal";
 import QuickAccess from "./QuickAccess";
@@ -63,20 +63,15 @@ function storedClosed(): string[] {
   }
 }
 
-// The entry to highlight: the screen itself, or the one whose path a detail
-// or form screen extends (/bills/123 → Bills).
-const selectedEntry = (pathname: string) =>
-  menuPages()
-    .map((p) => p.path)
-    .filter((path) => pathname === path || (path !== "/" && pathname.startsWith(`${path}/`)))
-    .sort((a, b) => b.length - a.length)[0] ?? pathname;
+// The entry to highlight: the screen's own, or its list's (/bills/123 → Bills).
+const selectedEntry = (pathname: string) => menuEntryFor(pathname)?.path ?? pathname;
 
 export default function AppShell() {
   const { user, signOut } = useSession();
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const { token } = theme.useToken();
-  const settings = useApi<{ settings: LabSettings | null }>(user ? "/settings" : null);
+  const settings = useApi<{ settings: LabSettings | null }>(user ? "/settings" : null, { optional: true });
   const [reminder, setReminder] = useState(() => sessionStorage.getItem(REMINDER_KEY));
   const [changingPassword, setChangingPassword] = useState(false);
   const [collapsed, setCollapsed] = useState(storedCollapsed);

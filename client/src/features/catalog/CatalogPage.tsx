@@ -21,8 +21,8 @@ export default function CatalogPage() {
   const catalog = useApi<{ items: CatalogItem[] }>("/catalog");
   const canEdit = RECEPTION.includes(user!.role);
   const isLead = user!.role === "lead_pathologist";
-  const mine = useApi<ApprovalList>(canEdit && !isLead ? "/approvals/mine" : null);
-  const queue = useApi<ApprovalList>(isLead ? "/approvals" : null);
+  const mine = useApi<ApprovalList>(canEdit && !isLead ? "/approvals/mine" : null, { optional: true });
+  const queue = useApi<ApprovalList>(isLead ? "/approvals" : null, { optional: true });
   const [kind, setKind] = useState<CatalogKind | "all">("all");
   const [search, setSearch] = useState("");
 

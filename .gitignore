@@ -9,3 +9,6 @@ e2e/report/
 
 # Frontend build output (built on the server at each deploy)
 client/dist/
+
+# Docker image export
+lab-management.tar.gz

@@ -73,6 +73,28 @@ test.describe("Quotations", () => {
     await expect(tech.getByRole("button", { name: "Convert to bill" })).toBeVisible();
   });
 
+  test("a home-visit quote converts with its quoted home-visit charge", async ({ loginAs, users, techApi }) => {
+    const quote = await techApi.createQuote({ items: ["CBC"], collectionMode: "home_visit", homeVisitCharge: 260 });
+    const tech = await loginAs(users.tech1);
+    await tech.goto(`/quotations/${quote.id}`);
+    await tech.getByRole("button", { name: "Convert to bill" }).click();
+    await expect(tech.getByRole("heading", { name: `Bill quotation ${quote.quoteNumber}` })).toBeVisible();
+    // The charge is locked to the quote's, and shown.
+    await expect(tech.getByLabel("Home-visit charge")).toBeDisabled();
+    await expect(tech.getByLabel("Home-visit charge")).toHaveValue("260");
+    await expect(figure(tech, "Net amount")).toContainText("₹560.00");
+    // The quoted items are listed, not just the home visit.
+    await expect(tech.getByRole("row").filter({ hasText: "₹300.00" })).toContainText("CBC");
+    await expect(tech.getByRole("row", { name: /HOMEVISIT/ })).toContainText("₹260.00");
+
+    await tech.getByLabel("Age (years)").fill("40");
+    await tech.getByLabel("Female", { exact: true }).check();
+    await tech.getByRole("button", { name: "Create bill" }).last().click();
+    await expect(tech.getByRole("heading", { name: /^Bill \d+/ })).toBeVisible();
+    const bill = await db().bill.findFirst({ where: { quotationId: quote.id }, include: { items: true } });
+    expect(bill.items.map((i) => [i.code, String(i.price)])).toEqual([["CBC", "300"], ["HOMEVISIT", "260"]]);
+  });
+
   test("a quote converts from its row in the list", async ({ loginAs, users, techApi }) => {
     const quote = await techApi.createQuote({ items: ["GLUF"] });
     const tech = await loginAs(users.tech1);
