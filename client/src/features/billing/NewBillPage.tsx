@@ -67,10 +67,13 @@ function BillForm({ lookups, quotation, initialPatient }: { lookups: Lookups; qu
   const distinct = useRef(false); // "Different person" was chosen for the look-alikes
   const [later, setLater] = useState<Record<string, Dayjs | null>>({});
 
-  // A quote's items, as catalog ids (its home-visit line comes back from the preview).
+  // A quote's items, as catalog ids (its home-visit line comes back from the
+  // preview), and its home-visit charge, which fills the locked charge field.
+  const quotedVisit = quotation?.items.find((i) => i.code === "HOMEVISIT");
   const quoted: Partial<BillValues> | undefined = quotation && {
     locationId: quotation.location.id,
     collectionMode: quotation.collectionMode,
+    homeVisitCharge: quotedVisit ? Number(quotedVisit.price) : undefined,
     referralType: quotation.referralType,
     referringDoctorId: quotation.referringDoctor?.id,
     payerType: quotation.payerType,

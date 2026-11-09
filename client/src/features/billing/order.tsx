@@ -242,7 +242,8 @@ export function ReferralPayerFields({ lookups, locked }: { lookups: Lookups; loc
 // warning says when a test would be billed twice (pivot.md §4.6).
 export function ItemsSection({ lookups, preview, error, locked, title = "Tests and services" }: { lookups: Lookups; preview?: Preview; error?: string; locked?: boolean; title?: string }) {
   const form = Form.useFormInstance();
-  const itemIds: string[] = Form.useWatch("itemIds", form) ?? [];
+  // preserve: a converted quote hides the item picker, so no field holds itemIds.
+  const itemIds: string[] = Form.useWatch("itemIds", { form, preserve: true }) ?? [];
   const priced = new Map(preview?.lines.map((l) => [l.catalogItemId, l]));
   const homeVisit = preview?.lines.find((l) => l.code === "HOMEVISIT");
   const rows = [
@@ -330,7 +331,7 @@ export function ItemsSection({ lookups, preview, error, locked, title = "Tests a
 // adds one, a second click takes it off. A test already covered by a chosen
 // profile says so, before it's billed twice.
 function QuickTiles({ catalog, chosen, onToggle }: { catalog: CatalogItem[]; chosen: string[]; onToggle(id: string): void }) {
-  const popular = useApi<{ items: Pick<CatalogItem, "id" | "code" | "name" | "kind">[]; days: number }>("/catalog/popular");
+  const popular = useApi<{ items: Pick<CatalogItem, "id" | "code" | "name" | "kind">[]; days: number }>("/catalog/popular", { optional: true });
   if (!popular.data?.items.length) return null;
   const chosenProfiles = catalog.filter((i) => i.kind === "profile" && chosen.includes(i.id));
   const coveredBy = (id: string) => chosenProfiles.find((p) => p.components.some((c) => c.test.id === id))?.code;

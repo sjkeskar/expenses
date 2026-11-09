@@ -76,7 +76,8 @@ e2e/
                             quote conversion, reassignment), headers, stored text
     ui/                     the app: shell and menus, lead screens, catalog and approvals,
                             patients, billing, revisits, day sheet, settlement, panels,
-                            verify, quotations, analytics, prints, axe scans
+                            verify, quotations, analytics, prints, axe scans,
+                            load failures on every route (load-failures.spec.js)
     lead/                   hand-over, re-appointment, lab rename, first-run setup (serial; API and app)
 ```
 
@@ -99,3 +100,9 @@ e2e/
   antd Selects go through `chooseOption()`.
 - **Every new screen gets an axe scan** in `ui/accessibility.spec.js`,
   dialogs included.
+- **Every new route gets a sample in `ui/load-failures.spec.js`** (its
+  first test fails until it has one). That spec holds every screen to the
+  load-failure rule: a screen's own data comes through `useApi`, whose
+  failed first load shows the screen's error page; only data a screen can
+  do without (widgets, badges, a dialog's list) is `{ optional: true }`,
+  shown as a message. Never borrow a screen's main data from the shell.

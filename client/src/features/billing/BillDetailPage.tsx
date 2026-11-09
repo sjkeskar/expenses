@@ -367,7 +367,7 @@ function ItemChecks({ items, value, onChange }: { items: BillItem[]; value?: str
 }
 
 function ReassignModal({ open, current, onSubmit, onClose }: { open: boolean; current: string; onSubmit(body: object): Promise<void>; onClose(): void }) {
-  const users = useApi<{ users: User[] }>(open ? "/users/reception" : null);
+  const users = useApi<{ users: User[] }>(open ? "/users/reception" : null, { optional: true });
   return (
     <FormModal<{ technicianId: string }> title="Reassign bill" okText="Reassign" open={open} onSubmit={onSubmit} onClose={onClose}>
       <Typography.Paragraph>Moves the bill to another person's day sheet and analytics. Payments stay with whoever took them.</Typography.Paragraph>

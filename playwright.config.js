@@ -44,7 +44,8 @@ module.exports = defineConfig({
   ],
   webServer: {
     // Builds the frontend first, so UI specs always run against the current client/.
-    command: "npm run build && node src/server.js",
+    // E2E_SKIP_BUILD=1 reuses the existing client/dist (e.g. several runs at once).
+    command: process.env.E2E_SKIP_BUILD ? "node src/server.js" : "npm run build && node src/server.js",
     url: `${process.env.E2E_BASE_URL}/login`,
     reuseExistingServer: false,
     timeout: 120_000,

@@ -24,7 +24,7 @@ export default function QuickAccess({ role }: { role: Role }) {
   const wide = Grid.useBreakpoint().xl;
   const [registering, setRegistering] = useState(false);
   const approver = APPROVERS.includes(role);
-  const queue = useApi<ApprovalList>(approver ? "/approvals" : null);
+  const queue = useApi<ApprovalList>(approver ? "/approvals" : null, { optional: true });
   const reloadQueue = queue.reload;
 
   // The count follows the queue as the user moves around the app.

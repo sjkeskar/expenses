@@ -1,0 +1,139 @@
+# Runs the e2e pack on every push. When it passes on develop, on a v* tag, or
+# on a manual run (Actions tab → "E2E and image" → Run workflow), it builds
+# the Docker image and saves it as lab-management-<version>.tar.gz:
+#   - always as a downloadable run artifact (kept 14 days);
+#   - on a v* tag, also attached to a GitHub Release of that name.
+# The version is the same as a local build: <package.json version>-<git describe>.
+name: E2E and image
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+# A newer push to the same branch cancels the older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ptsuser
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: lab_management_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ptsuser -d lab_management_test"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      # What .env.test holds locally (that file isn't in git). Throwaway values:
+      # this database exists only for the length of the job.
+      DATABASE_URL: postgresql://ptsuser:ci-only-password@localhost:5432/lab_management_test
+      SESSION_SECRET: ci-only-session-secret-0123456789abcdef0123456789abcdef
+      E2E_SKIP_BUILD: "1" # the client is built in its own step below
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+      - run: npx prisma generate
+      - name: Build the client
+        run: npm run build
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the e2e pack
+        run: npx playwright test
+
+      - name: Keep the test report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: |
+            e2e/report/
+            e2e/test-results/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  image:
+    needs: e2e
+    if: github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # to create the Release on a v* tag
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # git describe needs the history and tags
+
+      - name: Work out the version
+        id: version
+        run: |
+          VERSION="$(node -p "require('./package.json').version")-$(git describe --tags --always)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "file=lab-management-$VERSION.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+
+      - name: Build the image
+        run: docker build -t "lab-management:${{ steps.version.outputs.version }}" -t lab-management:latest .
+
+      - name: Save it as a .tar.gz
+        run: |
+          set -euo pipefail # a failed save must fail the step, not leave an empty file
+          docker save "lab-management:${{ steps.version.outputs.version }}" lab-management:latest \
+            | gzip > "${{ steps.version.outputs.file }}"
+          gzip -t "${{ steps.version.outputs.file }}"
+          sha256sum "${{ steps.version.outputs.file }}" > "${{ steps.version.outputs.file }}.sha256"
+          ls -lh "${{ steps.version.outputs.file }}"
+          cat "${{ steps.version.outputs.file }}.sha256"
+
+      # The same steps a recipient follows (docker/README.md): load the file,
+      # start it with compose, and check the app answers.
+      - name: Check the saved image starts
+        run: |
+          set -euo pipefail
+          docker rmi "lab-management:${{ steps.version.outputs.version }}" lab-management:latest
+          docker load -i "${{ steps.version.outputs.file }}"
+          docker compose up -d --no-build
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://localhost:8080/login; then echo "App is up"; break; fi
+            if [ "$i" = 60 ]; then echo "App didn't start"; docker compose logs; exit 1; fi
+            sleep 2
+          done
+          docker compose logs app
+          docker compose down -v
+
+      - name: Keep the image file
+        uses: actions/upload-artifact@v4
+        with:
+          name: lab-management-${{ steps.version.outputs.version }}
+          path: |
+            ${{ steps.version.outputs.file }}
+            ${{ steps.version.outputs.file }}.sha256
+          retention-days: 14
+          compression-level: 0 # already gzipped
+
+      - name: Attach it to a Release (v* tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "${{ steps.version.outputs.file }}" "${{ steps.version.outputs.file }}.sha256" \
+            --title "$GITHUB_REF_NAME" --generate-notes

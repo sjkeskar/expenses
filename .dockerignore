@@ -1,0 +1,12 @@
+node_modules
+client/dist
+.env
+.env.*
+!.env.example
+.git
+e2e
+bugs
+undefined
+*.log
+*.tar
+*.tar.gz

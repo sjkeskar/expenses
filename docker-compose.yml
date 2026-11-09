@@ -1,0 +1,35 @@
+# Runs the app plus its own PostgreSQL. Usage:
+#   docker compose up -d        then open http://localhost:8080
+# Data lives in the "pgdata" volume; `docker compose down -v` wipes it.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ptsuser
+      POSTGRES_PASSWORD: ptspass
+      POSTGRES_DB: lab_management
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ptsuser -d lab_management"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  app:
+    image: lab-management:latest
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    environment:
+      DATABASE_URL: postgresql://ptsuser:ptspass@db:5432/lab_management
+      SESSION_SECRET: ${SESSION_SECRET:-test-only-change-me-0123456789abcdef0123456789abcdef}
+      SESSION_MAX_AGE_MS: 14400000
+      DEV_USERNAME: ${DEV_USERNAME:-admin_dev}
+      DEV_PASSWORD: ${DEV_PASSWORD:-Admin@123}
+
+volumes:
+  pgdata:

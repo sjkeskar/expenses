@@ -39,6 +39,33 @@ test.describe("Catalog entry", () => {
     await expect(lead.getByRole("row", { name: new RegExp(c) })).toContainText(`Single · ${BASELINE.machineType}`);
   });
 
+  test("the machines cell suggests machine types as you type, for each step", async ({ loginAs, users, leadApi }) => {
+    const [c, spinner] = [code(), uid("E2E Centrifuge")];
+    await leadApi.call("POST", "/machines/types", { name: spinner });
+    const lead = await loginAs(users.lead);
+    await lead.goto("/catalog/entry");
+    await lead.getByLabel("Row 1 code").fill(c);
+    await lead.getByLabel("Row 1 name").fill("E2E Suggested machines");
+    await lead.getByLabel("Row 1 price").fill("90");
+    const machines = lead.getByLabel("Row 1 machines");
+    const suggestions = lead.locator(".ant-select-dropdown:visible");
+
+    // Any part of a name, in any case, is enough to find it.
+    await machines.click();
+    await machines.fill(spinner.slice(4, 14).toLowerCase());
+    await suggestions.getByTitle(spinner, { exact: true }).click();
+    await expect(machines).toHaveValue(spinner);
+    // After ">", the next step's suggestions; picking one keeps the first.
+    await machines.pressSequentially(" > haemato");
+    await suggestions.getByTitle(BASELINE.machineType, { exact: true }).click();
+    await expect(machines).toHaveValue(`${spinner} > ${BASELINE.machineType}`);
+
+    await lead.getByRole("button", { name: "Save" }).click();
+    await expect(lead.getByText("1 catalog item is saved.")).toBeVisible();
+    await lead.getByLabel("Search the catalog").fill(c);
+    await expect(lead.getByRole("row", { name: new RegExp(c) })).toContainText(`Single · ${spinner} > ${BASELINE.machineType}`);
+  });
+
   test("rows pasted from Excel, a test and a profile, saved by the lead", async ({ loginAs, users }) => {
     const [t, p] = [code(), code()];
     const lead = await loginAs(users.lead);

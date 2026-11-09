@@ -109,6 +109,15 @@ export const PAGES: Page[] = [
 
 // Print views (pivot.md §7): outside the app's frame, each opens its own
 // print dialog.
+// The menu entry a screen belongs to: the screen itself, or the one whose
+// path a detail or form screen extends (/bills/123 → Bills). A function,
+// not a constant: this module and the layout import each other.
+export function menuEntryFor(pathname: string): Page | undefined {
+  return PAGES.filter((p) => p.menu !== false && (pathname === p.path || (p.path !== "/" && pathname.startsWith(`${p.path}/`)))).sort(
+    (a, b) => b.path.length - a.path.length
+  )[0];
+}
+
 export const PRINTS: Page[] = [
   { path: "/print/bill/:id", label: "Bill", roles: READERS, element: <BillPrint /> },
   { path: "/print/quotation/:id", label: "Quotation", roles: RECEPTION, element: <QuotationPrint /> },

@@ -41,10 +41,10 @@ export default function HomePage() {
 
 function FrontDesk({ role }: { role: Role }) {
   const today = istToday();
-  const revisits = useApi<{ collections: Revisit[] }>(`/bills/revisits?until=${today}`);
-  const sheet = useApi<DaySheet>(`/daysheet?date=${today}`);
-  const mine = useApi<ApprovalList>("/approvals/mine");
-  const queue = useApi<ApprovalList>(APPROVERS.includes(role) ? "/approvals" : null);
+  const revisits = useApi<{ collections: Revisit[] }>(`/bills/revisits?until=${today}`, { optional: true });
+  const sheet = useApi<DaySheet>(`/daysheet?date=${today}`, { optional: true });
+  const mine = useApi<ApprovalList>("/approvals/mine", { optional: true });
+  const queue = useApi<ApprovalList>(APPROVERS.includes(role) ? "/approvals" : null, { optional: true });
   const due = revisits.data?.collections;
   const count = (n: number | undefined, to: string) => (n === undefined ? "—" : <Link to={to}>{n}</Link>);
 

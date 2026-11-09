@@ -9,6 +9,7 @@ import { KIND_LABELS } from "../../lib/format";
 import FormModal from "../../components/FormModal";
 import Page, { Section } from "../../components/Page";
 import type { CatalogItem, CatalogKind, MachineType } from "../../types/api";
+import MachineStepsInput from "./MachineStepsInput";
 import { parseSteps, stepsText } from "./steps";
 
 // The catalog entry grid (pivot.md §6.1): the column headers are in place,
@@ -214,7 +215,7 @@ function Grid({ items, types, initial, isLead, onDone }: { items: CatalogItem[];
                     title: "Machines",
                     width: 220,
                     render: (_, f) =>
-                      cell(f.name, "machines", "machines", <Input disabled={rows[f.name]?.kind !== "test"} />, [
+                      cell(f.name, "machines", "machines", <MachineStepsInput types={types} disabled={rows[f.name]?.kind !== "test"} />, [
                         {
                           validator: async (_: unknown, value: string) => {
                             parseSteps(value, types);
@@ -261,7 +262,7 @@ function Grid({ items, types, initial, isLead, onDone }: { items: CatalogItem[];
       </Form>
       <Typography.Text type="secondary">
         Draws: the sample labels in order, e.g. "Fasting, 1 h, 2 h"; empty means one sample. Machines: the machine types
-        a test runs on, in order, separated by "&gt;"; machines that run at the same time are joined with "+".
+        a test runs on, in order, separated by "&gt;"; machines that run at the same time are joined with "+". Start typing a name to pick it from the list.
       </Typography.Text>
 
       <FormModal title="Paste from Excel" okText="Add rows" open={pasting} onSubmit={addPasted} onClose={() => setPasting(false)}>

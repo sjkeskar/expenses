@@ -97,7 +97,7 @@ function LeadHandover() {
   const { modal } = App.useApp();
   const { refresh } = useSession();
   const navigate = useNavigate();
-  const status = useApi<LeadStatus>("/users/lead");
+  const status = useApi<LeadStatus>("/users/lead", { optional: true });
   const [pathologistId, setPathologistId] = useState<string>();
   const [handOver, busy] = useAction(async () => {
     await api("/users/lead/handover", { method: "POST", body: { pathologistId } });

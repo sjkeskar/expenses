@@ -123,5 +123,5 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log(`Laboratory Management System listening on http://0.0.0.0:${PORT}`);
+  console.log(`Laboratory Management System listening on http://localhost:${PORT}`);
 });
