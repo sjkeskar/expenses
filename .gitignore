@@ -11,4 +11,4 @@ e2e/report/
 client/dist/
 
 # Docker image export
-lab-management.tar.gz
+*.gz
