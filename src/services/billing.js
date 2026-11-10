@@ -535,6 +535,8 @@ async function cancelItems(tx, billId, { itemIds, reason, discountAmount, refund
   return cancellation;
 }
 
+const COLLECTED_AT_SLACK_MS = 5 * 60_000;
+
 // Marks pending draws collected — the patient came back (or a further sample
 // of a multi-draw test was taken).
 async function collectSamples(tx, billId, { collectionIds, collectedAt }, user) {
@@ -545,9 +547,14 @@ async function collectSamples(tx, billId, { collectionIds, collectedAt }, user) 
   });
   if (rows.length !== new Set(collectionIds).size) throw { status: 400, message: "Some of those samples aren't pending on this bill." };
   if (rows.some((r) => r.status === "collected")) throw { status: 409, message: "Some of those samples are already collected." };
+  // collectedAt is when the sample was really taken, for a collection entered
+  // afterwards (a home visit); it defaults to now. A few minutes ahead is a
+  // PC's clock running fast, not a sample from the future.
+  const at = parseInstant(collectedAt, "collectedAt") ?? new Date();
+  if (at.getTime() > Date.now() + COLLECTED_AT_SLACK_MS) throw { status: 400, message: "A sample can't be collected in the future." };
   await tx.sampleCollection.updateMany({
     where: { id: { in: collectionIds } },
-    data: { status: "collected", collectedAt: parseInstant(collectedAt, "collectedAt") ?? new Date(), collectedById: user.id },
+    data: { status: "collected", collectedAt: at, collectedById: user.id },
   });
 }
 

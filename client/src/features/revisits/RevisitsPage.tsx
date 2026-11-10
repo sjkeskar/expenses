@@ -3,7 +3,8 @@ import { Link } from "react-router-dom";
 import { App, Badge, Button, Popconfirm, Segmented, Table } from "antd";
 import { api } from "../../api";
 import { useAction, useApi } from "../../lib/hooks";
-import { formatDateTime, istDay, istToday } from "../../lib/format";
+import { formatDateTime, fromPicker, istDay, istToday, type Dayjs } from "../../lib/format";
+import CollectedAt from "../billing/CollectedAt";
 import Page, { NOWRAP, Section } from "../../components/Page";
 import type { Revisit } from "../../types/api";
 
@@ -20,10 +21,16 @@ export default function RevisitsPage() {
   const [scope, setScope] = useState<"today" | "all">("today");
   const until = scope === "today" ? istToday() : "";
   const revisits = useApi<{ collections: Revisit[] }>(`/bills/revisits?until=${until}`);
+  const [collectedAt, setCollectedAt] = useState<Dayjs | null>(null); // null: now
+  // Refused or not, the list is shown as it now is: a row another desk
+  // collected meanwhile mustn't stay listed (BUG-025).
   const [collect] = useAction(async (r: Revisit) => {
-    await api(`/bills/${r.billItem.bill.id}/samples`, { method: "PATCH", body: { collectionIds: [r.id] } });
-    message.success(`${r.test.code} (${r.label}) is collected for ${r.billItem.bill.patient.name}.`);
-    await revisits.reload();
+    try {
+      await api(`/bills/${r.billItem.bill.id}/samples`, { method: "PATCH", body: { collectionIds: [r.id], collectedAt: fromPicker(collectedAt) ?? undefined } });
+      message.success(`${r.test.code} (${r.label}) is collected for ${r.billItem.bill.patient.name}.`);
+    } finally {
+      await revisits.reload();
+    }
   });
 
   return (
@@ -66,8 +73,9 @@ export default function RevisitsPage() {
               render: (_, r) => (
                 <Popconfirm
                   title={`Mark ${r.test.code} (${r.label}) collected?`}
-                  description={`From ${r.billItem.bill.patient.name}, now.`}
+                  description={<CollectedAt who={r.billItem.bill.patient.name} value={collectedAt} onChange={setCollectedAt} />}
                   okText="Mark collected"
+                  onOpenChange={(open) => open && setCollectedAt(null)}
                   onConfirm={() => collect(r)}
                 >
                   <Button type="link" size="small">

@@ -62,6 +62,8 @@ e2e/
     api.js                  ApiClient: registerPatient(), createBill(), pay(), cancel(), …
     data.js                 uid(), phone(), ist(), istDate(), billPrefix()
     ui.js                   chooseOption() for antd Selects, addItem() for quote/bill items
+    flows.js                shared steps of the journey specs: section(), figure(), decide(),
+                            addCatalogItem(), setPrice(), expireQuote(), addCamp(), pickerTime()
     server.js               spawn extra app servers (short sessions, restarts)
   specs/
     auth/                   the role × endpoint permission matrix
@@ -77,7 +79,10 @@ e2e/
     ui/                     the app: shell and menus, lead screens, catalog and approvals,
                             patients, billing, revisits, day sheet, settlement, panels,
                             verify, quotations, analytics, prints, axe scans,
-                            load failures on every route (load-failures.spec.js)
+                            load failures on every route (load-failures.spec.js);
+                            journey-*.spec.js follow each role's day: the customer's
+                            quotation, the technician's bills, samples and day sheet,
+                            the pathologist's and lead's approvals, the accountant's tally
     lead/                   hand-over, re-appointment, lab rename, first-run setup (serial; API and app)
 ```
 

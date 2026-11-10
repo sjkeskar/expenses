@@ -9,6 +9,7 @@ import FormModal from "../../components/FormModal";
 import Page, { Figures, NOWRAP, Section } from "../../components/Page";
 import type { Bill, BillItem, Collection, PaymentMode, User } from "../../types/api";
 import { ApprovalStatusBadge } from "../approvals/ApprovalDetails";
+import CollectedAt from "./CollectedAt";
 import { payerText } from "./BillsPage";
 
 type Dialog = "payment" | "discount" | "cancel" | "report" | "reassign";
@@ -28,14 +29,20 @@ export default function BillDetailPage() {
   const data = useApi<{ bill: Bill }>(`/bills/${id}`);
   const [dialog, setDialog] = useState<Dialog>();
   const [samples, setSamples] = useState<Key[]>([]);
+  const [collectedAt, setCollectedAt] = useState<Dayjs | null>(null); // null: now
   const canAct = user!.role !== "accountant";
   const isLead = user!.role === "lead_pathologist";
 
+  // Refused or not, the bill is shown as it now is: a sample another desk
+  // collected meanwhile mustn't stay ticked and "Pending" here (BUG-025).
   const [collect, collecting] = useAction(async () => {
-    await api(`/bills/${id}/samples`, { method: "PATCH", body: { collectionIds: samples } });
-    message.success("The samples are recorded as collected.");
-    setSamples([]);
-    await data.reload();
+    try {
+      await api(`/bills/${id}/samples`, { method: "PATCH", body: { collectionIds: samples, collectedAt: fromPicker(collectedAt) ?? undefined } });
+      message.success("The samples are recorded as collected.");
+    } finally {
+      setSamples([]);
+      await data.reload();
+    }
   });
 
   if (!data.data) return null;
@@ -151,9 +158,10 @@ export default function BillDetailPage() {
             canAct && (
               <Popconfirm
                 title={`Mark ${samples.length} sample${samples.length === 1 ? "" : "s"} collected?`}
-                description="Recorded as collected now, by you."
+                description={<CollectedAt value={collectedAt} onChange={setCollectedAt} />}
                 okText="Mark collected"
                 disabled={!samples.length}
+                onOpenChange={(open) => open && setCollectedAt(null)}
                 onConfirm={collect}
               >
                 <Button disabled={!samples.length} loading={collecting}>

@@ -281,7 +281,8 @@ function BillForm({ lookups, quotation, initialPatient }: { lookups: Lookups; qu
               <Form.Item
                 label="Paid now"
                 name="payNow"
-                rules={[{ validator: async (_, v) => { if (v && paise(v) > netPaise) throw new Error("More than the net amount"); } }]}
+                // Checked only once the prices are in: until then the net amount isn't known (BUG-024). The server refuses an overpayment anyway.
+                rules={[{ validator: async (_, v) => { if (preview && v && paise(v) > netPaise) throw new Error("More than the net amount"); } }]}
               >
                 <InputNumber min={0} prefix="₹" style={{ width: "100%" }} />
               </Form.Item>

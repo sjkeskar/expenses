@@ -70,3 +70,7 @@ expected-failure summary, run `E2E_SHOW_BUGS=1 npm run test:e2e`.
 | [BUG-019](Closed/BUG-019-settle-list-double-load-wipes-ticks.md) | Picking a settlement company loads its bills twice; the second load wipes ticked bills | Medium | Operator/Admin UI | Closed |
 | [BUG-020](Closed/BUG-020-settle-list-not-refreshed-after-failed-settlement.md) | After a failed settlement, the settle list can't be refreshed by re-picking the company | Low | Operator/Admin UI | Closed |
 | [BUG-021](Closed/BUG-021-missing-record-shows-blank-page.md) | A record that can't be loaded shows a blank page, with no message | Low | Detail pages (UI) | Closed |
+| [BUG-022](Closed/BUG-022-removed-names-cannot-be-reused.md) | A removed machine type, machine or panel can't be added again under the same name | Low | Machines, Panels & camps | Closed |
+| [BUG-023](Closed/BUG-023-no-way-to-enter-sample-collection-time.md) | No way to enter when a sample was actually collected | Medium | Bill detail, Sample revisits | Closed |
+| [BUG-024](Closed/BUG-024-payment-refused-before-prices-load.md) | New bill: a payment is called "More than the net amount" before the prices have loaded | Low | New bill | Closed |
+| [BUG-025](Closed/BUG-025-sample-lists-stale-after-already-collected.md) | After "already collected", the bill and the revisit list keep showing the sample as pending | Low | Bill detail, Sample revisits | Closed |

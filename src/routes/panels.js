@@ -32,7 +32,19 @@ router.get("/", requireAuth, requireRole(...RECEPTION, "accountant"), route("Cou
 
 // POST /api/panels — lead. Body: { name, type, contact? }.
 router.post("/", requireAuth, requireRole(...LEAD), route("Could not add the panel.", async (req, res) => {
-  res.status(201).json({ panel: await prisma.panel.create({ data: panelFields(req.body), include: WITH_PRICES }) });
+  const data = panelFields(req.body);
+  // Removing is a soft delete, so a removed panel still holds its name:
+  // adding it again brings that row back (its old bills still point at it),
+  // as a new panel would start: without the standing rates it once had.
+  const existing = await prisma.panel.findUnique({ where: { name: data.name } });
+  if (existing?.isActive) throw { status: 409, message: "A panel with that name already exists." };
+  if (!existing) return res.status(201).json({ panel: await prisma.panel.create({ data, include: WITH_PRICES }) });
+  const panel = await transaction(async (tx) => {
+    const revived = await tx.panel.update({ where: { id: existing.id }, data: { ...data, isActive: true, priceListId: null }, include: WITH_PRICES });
+    if (existing.priceListId) await tx.priceList.delete({ where: { id: existing.priceListId } });
+    return revived;
+  });
+  res.status(201).json({ panel });
 }));
 
 // PATCH /api/panels/:id — lead. Body: { name, type, contact? }.

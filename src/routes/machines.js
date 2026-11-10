@@ -28,7 +28,14 @@ router.get("/", requireAuth, requireRole(...RECEPTION), route("Could not load ma
 router.post("/types", requireAuth, requireRole(...LEAD), route("Could not add the machine type.", async (req, res) => {
   const name = (req.body.name || "").trim();
   if (!name) throw { status: 400, message: "Machine type name is required." };
-  res.status(201).json({ type: await prisma.machineType.create({ data: { name } }) });
+  // Removing is a soft delete, so a removed type still holds its name: adding
+  // it again brings that row back (tests that used it still point at it).
+  const existing = await prisma.machineType.findUnique({ where: { name } });
+  if (existing?.isActive) throw { status: 409, message: "A machine type with that name already exists." };
+  const type = existing
+    ? await prisma.machineType.update({ where: { id: existing.id }, data: { isActive: true } })
+    : await prisma.machineType.create({ data: { name } });
+  res.status(201).json({ type });
 }));
 
 // POST /api/machines — lead. Body: { name, machineTypeId, branchId }.
@@ -39,7 +46,13 @@ router.post("/", requireAuth, requireRole(...LEAD), route("Could not add the mac
   if (!type?.isActive) throw { status: 400, message: "Select a machine type." };
   const branch = req.body.branchId ? await prisma.location.findUnique({ where: { id: req.body.branchId } }) : null;
   if (!branch?.isActive || branch.type !== "branch") throw { status: 400, message: "Machines belong to an active processing branch." };
-  res.status(201).json({ machine: await prisma.machine.create({ data: { name, machineTypeId: type.id, branchId: branch.id } }) });
+  // As with types: a removed machine of that name at the branch comes back.
+  const existing = await prisma.machine.findUnique({ where: { branchId_name: { branchId: branch.id, name } } });
+  if (existing?.isActive) throw { status: 409, message: `${branch.name} already has a machine with that name.` };
+  const machine = existing
+    ? await prisma.machine.update({ where: { id: existing.id }, data: { machineTypeId: type.id, isActive: true } })
+    : await prisma.machine.create({ data: { name, machineTypeId: type.id, branchId: branch.id } });
+  res.status(201).json({ machine });
 }));
 
 // DELETE /api/machines/types/:id and /api/machines/:id — lead. Soft deletes.
